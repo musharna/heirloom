@@ -40,6 +40,15 @@ describe("growPlant", () => {
     expect(p.blooms.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("wires blooms to the real layout, not an empty stub", () => {
+    // sim.ts briefly carried a stub layoutBloom that returned petals: []. Every other
+    // assertion in this file passes against that stub, so this is the one that would
+    // catch a forgotten stub replacement.
+    const p = growPlant(BASE, 7, at());
+    expect(p.blooms[0]!.petals.length).toBeGreaterThan(0);
+    for (const b of p.blooms) expect(b.petals.length).toBeGreaterThan(0);
+  });
+
   it("tapers monotonically along a chain", () => {
     const p = growPlant({ ...BASE, branchiness: 0 }, 3, at());
     const chain = p.segments.filter((s) => s.chain === 0);

@@ -1,3 +1,6 @@
 
 # worktrees + local claude state
 .claude/
+
+# dependencies — restored by `npm ci` from package-lock.json, never committed
+node_modules/

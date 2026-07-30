@@ -175,8 +175,9 @@ deliberately outside the genome-determined structure.
    inspect actual output and iterate art direction against it. **DONE; the critic gate was retired
    on 2026-07-30 — see §13.** Leaves were pulled into this milestone on 2026-07-29.
 2. **Genome logic, TDD** — `loci`, `genome`, `inherit`, `mutate`, `express`, `serialize`. Pure, no
-   rendering.
-3. **Wiring** — genes → growth; garden plots; the four verbs.
+   rendering. **DONE 2026-07-30 — see §14.**
+3. **Wiring** — genes → growth; garden plots; the four verbs. _Partly done: the garden bed now
+   grows from `express(genome)` seeded by `genomeSeed(genome)`. The four verbs are not built._
 4. **Accumulation** — retirement, background compositing, depth-of-field.
 5. **Sharing and persistence** — URL round-trip, localStorage.
 
@@ -235,12 +236,12 @@ Four independent critic rounds were run (reports in the job tmp dir, summarised 
 four returned **0 of 5 criteria PASS**. Each round nonetheless found real, pixel-measured
 defects, and each was fixed at its cause:
 
-| Round | Headline defect | Fix |
-| --- | --- | --- |
-| 1 | Petals were rounded squares in a pinwheel — measured aspect **1.05** | Obovate profile; width set as a fraction of length |
-| 2 | `lobed` petals were axis-aligned stair-steps detached from the receptacle | Amplitude envelope fading to zero at base and apex; 96 samples |
-| 3 | "No ink contour on anything" | Traced to a **contradiction in the art direction**: dark ink on a near-black ground is invisible by construction. The contour was rendering at 1px and could not be seen |
-| 4 | Light rim "reads as glow, not linework" | The 1px rim was drowned by an 18–27px halo whose area equalled the whole drawn plant |
+| Round | Headline defect                                                           | Fix                                                                                                                                                                      |
+| ----- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1     | Petals were rounded squares in a pinwheel — measured aspect **1.05**      | Obovate profile; width set as a fraction of length                                                                                                                       |
+| 2     | `lobed` petals were axis-aligned stair-steps detached from the receptacle | Amplitude envelope fading to zero at base and apex; 96 samples                                                                                                           |
+| 3     | "No ink contour on anything"                                              | Traced to a **contradiction in the art direction**: dark ink on a near-black ground is invisible by construction. The contour was rendering at 1px and could not be seen |
+| 4     | Light rim "reads as glow, not linework"                                   | The 1px rim was drowned by an 18–27px halo whose area equalled the whole drawn plant                                                                                     |
 
 ### Why it was retired
 
@@ -260,7 +261,7 @@ correct, and the provenance is the reason:
   final 0/5, 7 of 12 panels read as plants and 7 of 11 axes passed — the score did not track
   the state of the work.
 
-**Lesson for later milestones:** an independent critic is valuable for *finding* defects in
+**Lesson for later milestones:** an independent critic is valuable for _finding_ defects in
 rendered output and should keep being used that way. It is not valuable as a pass/fail gate
 when the rubric is self-authored, unreviewed, and mutable. Judge with the critic; decide with
 the user.
@@ -283,3 +284,45 @@ opened the canopy so branch geometry reads. Ground is an irregular lit crest, no
 4. Foliage is sparse relative to flower area, and leaf blades are identical stamps.
 5. Colour is vivid rather than muted-saturated; hue variants hold identical S and V, so `blue`
    reads slightly electric.
+
+## 14. Milestone 2 outcome — the genome layer
+
+Built 2026-07-30 at `7996ae5`, wired into the garden at `33feb9a`. 123 tests, `tsc --noEmit`
+clean. Files: `src/genome/{loci,genome,express,serialize}.ts`.
+
+Both §9 controls are **in-suite and machine-checked**, not one-time manual observations. The
+segregation assertion is pointed at two deliberately broken `inherit`s and must reject both — and
+it matches the failure **message** rather than using a bare `.toThrow()`, which any `TypeError`
+from a mis-shaped fixture would satisfy. The epistasis test carries its coloured × coloured
+positive control inline. Six mutants (always-white, inverted dominance, dropped hue locus,
+dominant-not-recessive doubling, no checksum, skipped version check) were all killed.
+
+### What the tests could not see
+
+The genome layer passed 115 unit tests and then produced **seven near-identical white plants** the
+moment it drove the real renderer. Two separate defects, both properties of a **distribution**
+while every test asserted only reachability:
+
+- `W` is dominant, so a uniform allele frequency masks 3/4 of the population.
+- A polygenic block of twelve fair coins is a binomial concentrated on dosage 6 (sd 1.7 of a 0..12
+  range), so every founder got the same mid-range habit.
+
+Founder frequencies are now explicit and derived rather than assumed. `W` sits at 0.08. The `P`
+weights are solved backwards from wanting all four shapes equally often, because a **dominance
+series does not give equal shapes from equal frequencies** — the top allele shows whenever either
+copy carries it. Each polygenic block draws one frequency per founder and then its loci at that
+frequency, making marginal dosage exactly uniform over 0..12 (a beta(1,1)-binomial).
+
+That is a claim about **founders only**. `inherit` still mixes blocks locus-by-locus, so a
+breeding population drifts back toward a normal distribution — which is correct, and is what will
+make selection feel like it is doing something.
+
+**The transferable lesson:** a reachability test ("all five hue classes appear over 400 draws")
+passes while the distribution is unusable. Where the visible property IS the distribution, assert
+the distribution — and pair each such assertion with a control pointed at the generator that
+produced the bad output, so it cannot quietly stop discriminating. Eight such tests now exist.
+
+### Deferred
+
+`mutate` and `inherit` are correct but **unreached by any verb** — nothing in the UI breeds yet.
+Milestone 3 (the four verbs) is what exercises them against a player.

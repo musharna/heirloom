@@ -84,9 +84,35 @@ export function smoothChain(
   return out;
 }
 
+/**
+ * Direction the light comes from, in screen space (up and slightly left).
+ *
+ * One shared vector so every shaded surface agrees. Lighting each element from its own local
+ * frame instead is what makes procedural art read as a collection of decals: a stem lit from
+ * its own left and a leaf lit from its own left are lit from different real directions the
+ * moment either one rotates.
+ */
+export const LIGHT: Vec2 = { x: -0.45, y: -0.89 };
+
+export type OutlineOpts = {
+  /** Fraction of the full width to draw. 1 = the silhouette itself. */
+  widthScale?: number;
+  /**
+   * Shift the strip toward the light, as a fraction of local width. The shift follows the
+   * LIT side as the stroke curves, rather than a fixed screen direction — a highlight that
+   * stayed on the geometric left would cross to the shadow side on a stem that bends over.
+   */
+  towardLight?: number;
+};
+
 /** Variable-width outline polygon: left side forward, right side back. */
-export function buildOutline(chain: StrokeSegment[]): Vec2[] {
+export function buildOutline(
+  chain: StrokeSegment[],
+  opts: OutlineOpts = {},
+): Vec2[] {
   if (chain.length === 0) return [];
+  const widthScale = opts.widthScale ?? 1;
+  const towardLight = opts.towardLight ?? 0;
   const left: Vec2[] = [];
   const right: Vec2[] = [];
 
@@ -100,8 +126,14 @@ export function buildOutline(chain: StrokeSegment[]): Vec2[] {
     const len = Math.hypot(dx, dy) || 1;
     const nx = -dy / len;
     const ny = dx / len;
-    left.push({ x: x + (nx * w) / 2, y: y + (ny * w) / 2 });
-    right.push({ x: x - (nx * w) / 2, y: y - (ny * w) / 2 });
+    // How much this normal faces the light: +1 fully lit, -1 fully away.
+    const facing = nx * LIGHT.x + ny * LIGHT.y;
+    const shift = towardLight * w * facing;
+    const cx = x + nx * shift;
+    const cy = y + ny * shift;
+    const half = (w * widthScale) / 2;
+    left.push({ x: cx + nx * half, y: cy + ny * half });
+    right.push({ x: cx - nx * half, y: cy - ny * half });
   };
 
   for (const s of chain) push(s.x0, s.y0, s.x1 - s.x0, s.y1 - s.y0, s.w0);

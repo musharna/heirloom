@@ -1,6 +1,12 @@
 import type { Bloom, Plant, StrokeSegment } from "../types";
-import { buildOutline, fillOutline, groupChains, smoothChain } from "./strokes";
-import { leafMidrib, leafPath } from "./leaves";
+import {
+  LIGHT,
+  buildOutline,
+  fillOutline,
+  groupChains,
+  smoothChain,
+} from "./strokes";
+import { leafMidrib, leafPath, leafVeins } from "./leaves";
 import {
   fillPetal,
   petalColor,
@@ -8,6 +14,7 @@ import {
   petalGlow,
   petalPath,
   petalRim,
+  petalRimWidth,
 } from "./petals";
 
 /**
@@ -28,12 +35,18 @@ export const PALETTE = {
   stem: "#3d5c46",
   stemHi: "#557a5f",
   stemRim: "rgba(196,224,201,0.55)",
+  // Translucent, not opaque, so one pair of tones shades BOTH stem colours. Opaque bands
+  // would need a matched pair per base colour, and every future colour would need two more.
+  stemShade: "rgba(12,24,16,0.26)",
+  stemLit: "rgba(206,234,210,0.11)",
   soil: "#1c2021",
   /** Bottom of the soil gradient — earth falls off with depth rather than reading as a slab. */
   soilDeep: "#101315",
   soilRim: "rgba(150,170,152,0.34)",
   stamen: "#e8c35a",
-  leaf: "#35543d",
+  leaf: "#2d4a35",
+  /** Lit edge of a blade. Paired with `leaf` as a gradient, never used alone. */
+  leafLit: "#456a4e",
   leafRim: "rgba(178,212,183,0.5)",
   leafVein: "rgba(190,220,196,0.32)",
   // Dark line kept ONLY for divisions between overlapping petals, where the surface
@@ -233,12 +246,35 @@ export function paintPlant(
   const chains = groupChains(visibleSegments(plant, untilTick));
   chains.sort((a, b) => (b[0]?.depth ?? 0) - (a[0]?.depth ?? 0));
   for (const chain of chains) {
-    const outline = buildOutline(smoothChain(chain, 3));
+    const dense = smoothChain(chain, 3);
+    const outline = buildOutline(dense);
     fillOutline(
       ctx,
       outline,
       chain[0]!.depth === 0 ? PALETTE.stemHi : PALETTE.stem,
     );
+
+    // Round the stem. Two strips inside the silhouette — a shadow band on the far side and a
+    // narrower highlight on the lit side — turn a flat ribbon into a cylinder. At 4x
+    // magnification the unshaded version read as a paper cut-out, which no amount of work on
+    // the petals was going to fix: stems and leaves are most of the plant's area.
+    // Nested strips at falling alpha rather than one band each. A single strip has a hard
+    // polygon edge that reads as a stripe painted ON the stem — visible as a seam down every
+    // thick trunk — where a stack of three approximates the smooth falloff of a curved
+    // surface. A gradient would be better still, but a gradient cannot follow a curve.
+    for (const [scale, toward, color] of [
+      [0.74, -0.13, PALETTE.stemShade],
+      [0.52, -0.24, PALETTE.stemShade],
+      [0.42, 0.24, PALETTE.stemLit],
+      [0.2, 0.34, PALETTE.stemLit],
+    ] as const) {
+      fillOutline(
+        ctx,
+        buildOutline(dense, { widthScale: scale, towardLight: toward }),
+        color,
+      );
+    }
+
     if (outline.length >= 3) {
       ctx.beginPath();
       ctx.moveTo(outline[0]!.x, outline[0]!.y);
@@ -262,19 +298,47 @@ export function paintPlant(
     ctx.moveTo(pts[0]!.x, pts[0]!.y);
     for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]!.x, pts[i]!.y);
     ctx.closePath();
-    ctx.fillStyle = PALETTE.leaf;
+    // A gradient across the blade, not a flat fill. The direction is the leaf's own normal
+    // resolved against the shared LIGHT vector, so a leaf pointing down-right is lit on the
+    // same real side as one pointing up-left — lighting each blade from its own local frame
+    // is what makes procedural foliage read as a sheet of identical decals.
+    const nx = -Math.sin(lf.angle);
+    const ny = Math.cos(lf.angle);
+    const facing = Math.sign(nx * LIGHT.x + ny * LIGHT.y) || 1;
+    const half = lf.width * 0.6 * facing;
+    const g = ctx.createLinearGradient(
+      lf.attach.x + nx * half,
+      lf.attach.y + ny * half,
+      lf.attach.x - nx * half,
+      lf.attach.y - ny * half,
+    );
+    g.addColorStop(0, PALETTE.leafLit);
+    g.addColorStop(1, PALETTE.leaf);
+    ctx.fillStyle = g;
     ctx.fill();
     ctx.strokeStyle = PALETTE.leafRim;
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    const [a, b] = leafMidrib(lf);
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    // Veins only once the blade is big enough for them to be more than noise. Below ~9px a
+    // vein is a single dark pixel row and just muddies the fill.
     ctx.strokeStyle = PALETTE.leafVein;
-    ctx.lineWidth = 0.7;
+    const rib = leafMidrib(lf);
+    ctx.beginPath();
+    ctx.moveTo(rib[0]!.x, rib[0]!.y);
+    for (let i = 1; i < rib.length; i++) ctx.lineTo(rib[i]!.x, rib[i]!.y);
+    ctx.lineWidth = 0.8;
     ctx.stroke();
+
+    if (lf.length > 9) {
+      ctx.beginPath();
+      for (const [a, b] of leafVeins(lf)) {
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      }
+      ctx.lineWidth = 0.55;
+      ctx.stroke();
+    }
   }
 
   // Blooms in TWO passes: every halo first, then every petal.
@@ -358,7 +422,10 @@ export function paintPlant(
           ctx,
           petalPath(p),
           petalFill(ctx, p, b.hueClass, b.white),
-          petalRim(b.white, p.colorDepth),
+          // Hue class matters now that lightness varies per hue: the rim is chosen by
+          // CONTRAST with the fill, so passing the wrong lightness picks the wrong rim.
+          petalRim(b.white, p.colorDepth, b.hueClass),
+          petalRimWidth(p.width),
         );
       }
     });

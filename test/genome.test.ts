@@ -256,3 +256,121 @@ describe("randomGenome", () => {
     expect(seen.size).toBe(4);
   });
 });
+
+/**
+ * Founder DIVERSITY, not just reachability.
+ *
+ * The test above passed — all four alleles appear — while the founder population on screen
+ * was seven near-identical white plants. Reachability over 300 draws says nothing about the
+ * distribution, and the distribution is the entire visible property. Every assertion here is
+ * paired with a control that points it at the uniform-allele generator that actually shipped,
+ * so none of them can quietly stop discriminating.
+ */
+describe("founder population", () => {
+  /** The generator that produced the all-white, all-identical bed. */
+  function uniformFounder(rand: () => number): Genome {
+    const two = <A>(pair: readonly [A, A]): [A, A] => [
+      rand() < 0.5 ? pair[0] : pair[1],
+      rand() < 0.5 ? pair[0] : pair[1],
+    ];
+    const flat = (): PolyBlock => {
+      let a = 0;
+      let b = 0;
+      for (let i = 0; i < 6; i++) {
+        if (rand() < 0.5) a |= 1 << i;
+        if (rand() < 0.5) b |= 1 << i;
+      }
+      return { a, b };
+    };
+    return {
+      W: two(["W", "w"]),
+      H1: two(["H1", "h1"]),
+      H2: two(["H2", "h2"]),
+      D: two(["D", "d"]),
+      P: [
+        (["P^f", "P^l", "P^p", "p"] as const)[Math.floor(rand() * 4)]!,
+        (["P^f", "P^l", "P^p", "p"] as const)[Math.floor(rand() * 4)]!,
+      ],
+      V: flat(),
+      G: flat(),
+      B: flat(),
+    };
+  }
+
+  const sample = (gen: (r: () => number) => Genome, seed: number): Genome[] => {
+    const rand = mulberry32(seed);
+    return Array.from({ length: 2000 }, () => gen(rand));
+  };
+
+  const whiteFraction = (gs: Genome[]): number =>
+    gs.filter((g) => g.W.includes("W")).length / gs.length;
+
+  const dosageSpread = (gs: Genome[]): number => {
+    const xs = gs.map((g) => dosage(g.G));
+    const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+    return Math.sqrt(xs.reduce((a, x) => a + (x - mean) ** 2, 0) / xs.length);
+  };
+
+  const rarestShapeShare = (gs: Genome[]): number => {
+    const counts = new Map<string, number>();
+    for (const g of gs) {
+      const shown = ["P^f", "P^l", "P^p", "p"].find((a) =>
+        g.P.includes(a as never),
+      )!;
+      counts.set(shown, (counts.get(shown) ?? 0) + 1);
+    }
+    return Math.min(...[...counts.values()]) / gs.length;
+  };
+
+  it("keeps white uncommon — it is a surprise, not the default", () => {
+    expect(whiteFraction(sample(randomGenome, 900))).toBeLessThan(0.25);
+  });
+
+  it("CONTROL: uniform allele frequencies make 3/4 of founders white", () => {
+    // `W` is dominant, so an allele at 0.5 shows in 1 − 0.5² of the population. This is the
+    // arithmetic the shipped generator lost, and the reason the whole bed came out white.
+    expect(whiteFraction(sample(uniformFounder, 900))).toBeGreaterThan(0.7);
+  });
+
+  it("spreads habit across the whole range", () => {
+    // Uniform over 0..12 has sd √14 ≈ 3.74; a fair binomial has √3 ≈ 1.73.
+    expect(dosageSpread(sample(randomGenome, 901))).toBeGreaterThan(3);
+  });
+
+  it("CONTROL: twelve fair coins collapse habit onto the mid-range", () => {
+    expect(dosageSpread(sample(uniformFounder, 901))).toBeLessThan(2.2);
+  });
+
+  it("reaches both habit extremes, not just the middle", () => {
+    const gs = sample(randomGenome, 902);
+    const ds = gs.map((g) => dosage(g.G));
+    expect(Math.min(...ds)).toBeLessThan(2);
+    expect(Math.max(...ds)).toBeGreaterThan(10);
+  });
+
+  it("shows all five hue classes at a usable rate", () => {
+    const gs = sample(randomGenome, 903);
+    for (const want of [0, 1, 2, 3, 4]) {
+      const share =
+        gs.filter(
+          (g) =>
+            (g.H1[0] === "H1" ? 1 : 0) +
+              (g.H1[1] === "H1" ? 1 : 0) +
+              (g.H2[0] === "H2" ? 1 : 0) +
+              (g.H2[1] === "H2" ? 1 : 0) ===
+            want,
+        ).length / gs.length;
+      expect(share).toBeGreaterThan(0.1);
+    }
+  });
+
+  it("shows all four petal shapes at a usable rate", () => {
+    // A dominance series does NOT give equal shapes from equal allele frequencies: the top
+    // allele shows whenever either copy carries it. The founder weights solve that backwards.
+    expect(rarestShapeShare(sample(randomGenome, 904))).toBeGreaterThan(0.15);
+  });
+
+  it("CONTROL: equal allele frequencies starve the bottom of the P series", () => {
+    expect(rarestShapeShare(sample(uniformFounder, 904))).toBeLessThan(0.1);
+  });
+});

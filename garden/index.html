@@ -51,6 +51,15 @@
       #code {
         opacity: 0.4;
         letter-spacing: 0.02em;
+        cursor: pointer;
+      }
+      #code:hover {
+        opacity: 0.8;
+      }
+      /* A rejected save or a bad share link must not read like an ordinary hint. */
+      #hint.notice {
+        color: #ecc474;
+        opacity: 1;
       }
       canvas {
         touch-action: none; /* or a drag scrolls the page instead of moving a seed */

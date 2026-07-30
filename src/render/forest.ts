@@ -58,7 +58,14 @@ export function effectiveDepth(): number {
  * Scattered horizontally on purpose. Retiring each plant at the plot it grew in would build a
  * background of six vertical columns — a bar chart of plot usage rather than a forest.
  */
-export function placeRetired(genomeKey: number, index: number): Placement {
+/** Horizontal scatter, as a fraction of world width. 340px of a 1180-wide world. */
+export const SCATTER = 0.288;
+
+export function placeRetired(
+  genomeKey: number,
+  index: number,
+  worldW = 1180,
+): Placement {
   // Index is mixed in so that retiring the SAME genome twice does not stack two identical
   // silhouettes exactly on top of each other.
   const rand = mulberry32((genomeKey ^ (index * 0x9e3779b1)) >>> 0);
@@ -70,7 +77,11 @@ export function placeRetired(genomeKey: number, index: number): Placement {
   // and the live bed stopped being the subject of its own picture. A background layer has to
   // give up far more than it intuitively seems it should.
   return {
-    dx: (rand() - 0.5) * 340,
+    // Scatter is a FRACTION of the world, not a fixed 340px. A fixed span is 29% of a
+    // 1180-wide desktop world but 86% of a 396-wide phone world, so on a phone retired
+    // plants were flung clean off the canvas and the background came back genuinely empty —
+    // `depth 1, coverage 0`, a layer that had been composited and drawn nowhere.
+    dx: (rand() - 0.5) * worldW * SCATTER,
     // Further back sits higher in frame and smaller: a cheap, consistent perspective cue.
     dy: -8 - depth * 30,
     scale: 0.82 - depth * 0.18,

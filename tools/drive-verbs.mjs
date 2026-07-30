@@ -25,7 +25,7 @@ await page.goto(URL, { waitUntil: 'networkidle' });
 await page.waitForFunction(() => window.__ready === true, { timeout: 15000 });
 
 const box = await page.locator('#c').boundingBox();
-const size = await page.evaluate(() => window.__size);
+const size = await page.evaluate(() => window.__size());
 // Canvas space -> page space. The canvas is CSS-scaled to fit the viewport, so these differ.
 const toPage = (p) => ({
   x: box.x + (p.x * box.width) / size.w,

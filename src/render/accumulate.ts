@@ -48,7 +48,7 @@ export class Forest {
   retire(plant: Plant, genomeKey: number): void {
     const origin = plant.segments[0];
     if (!origin) return;
-    const place: Placement = placeRetired(genomeKey, this.layers);
+    const place: Placement = placeRetired(genomeKey, this.layers, this.w);
     const c = this.ctx;
 
     // `source-atop` confines the wash to pixels that already exist, so the empty background

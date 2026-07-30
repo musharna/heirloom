@@ -16,7 +16,7 @@ await page.goto(URL, { waitUntil: 'networkidle' });
 await page.waitForFunction(() => window.__ready === true, { timeout: 15000 });
 
 const box = await page.locator('#c').boundingBox();
-const size = await page.evaluate(() => window.__size);
+const size = await page.evaluate(() => window.__size());
 const toPage = (p) => ({
   x: box.x + (p.x * box.width) / size.w,
   y: box.y + (p.y * box.height) / size.h,

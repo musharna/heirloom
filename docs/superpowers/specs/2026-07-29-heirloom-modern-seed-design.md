@@ -176,7 +176,7 @@ deliberately outside the genome-determined structure.
    on 2026-07-30 — see §13.** Leaves were pulled into this milestone on 2026-07-29.
 2. **Genome logic, TDD** — `loci`, `genome`, `inherit`, `mutate`, `express`, `serialize`. Pure, no
    rendering. **DONE 2026-07-30 — see §14.**
-3. **Wiring** — genes → growth; garden plots; the four verbs. _Partly done: the garden bed now
+3. **Wiring** — genes → growth; garden plots; the four verbs. **DONE 2026-07-30 — see §15.**
    grows from `express(genome)` seeded by `genomeSeed(genome)`. The four verbs are not built._
 4. **Accumulation** — retirement, background compositing, depth-of-field.
 5. **Sharing and persistence** — URL round-trip, localStorage.
@@ -326,3 +326,50 @@ produced the bad output, so it cannot quietly stop discriminating. Eight such te
 
 `mutate` and `inherit` are correct but **unreached by any verb** — nothing in the UI breeds yet.
 Milestone 3 (the four verbs) is what exercises them against a player.
+
+## 15. Milestone 3 outcome — the four verbs
+
+Built 2026-07-30 at `c36bd78`. 151 tests, `tsc --noEmit` clean. Files: `src/game/{garden,hit}.ts`,
+a rewritten `garden/garden.ts`, and `tools/drive-verbs.mjs`.
+
+All four verbs of §4 are live. Which one fires is decided on RELEASE, from travel distance and
+what sits under the pointer — deciding on press would commit to a clone before knowing whether a
+cross was starting.
+
+State and hit-testing are pure and canvas-free, so the verbs are unit-testable without a DOM.
+`shownBlooms()` runs the **same occlusion cull as the renderer**, so the player can never click a
+flower that is not on screen.
+
+### Decisions taken here, with their rationale
+
+- **Dropping onto an occupied plot retires the occupant** rather than refusing. Refusing lets the
+  bed fill up permanently after six plants, and §11 rules out the alternative valve (death on a
+  timer). The displaced genome lands in `retired` — exactly Milestone 4's input. Because this is
+  the only destructive verb, the target ring turns **amber** and the hint says REPLACE.
+- **The tray evicts its oldest seed at capacity** instead of refusing a new one. §11 fixes the
+  tone as pressure-free; a full tray that rejects a cross turns a click into a failure state.
+- **`plotAt` derives its reach from the widest gap between adjacent plots**, not a constant. A
+  fixed 95px radius cannot tell "dropped between two plots" from "dropped nowhere near the
+  garden": at 200px spacing it opened a 10px dead band in every gap where a drop silently did
+  nothing. Both the fix and a control pinning the old behaviour are in the suite.
+
+### The harness lesson (worth more than the feature)
+
+A mutation run over the verb driver reported `clone disabled → 3 checks failed` and then
+`cross/plant/splice disabled → 0 checks failed`, which read as three surviving mutants. All three
+results were **meaningless**: the revert step had reset an uncommitted file, so the driver crashed
+on startup and printed nothing, and `grep -c '^FAIL'` counts zero for a crash exactly as it does
+for a pass.
+
+**A harness that reports "0 failures" must first prove it RAN.** The fixed version requires a
+sentinel line from the driver before it will trust a count, and runs an unmutated baseline first.
+Re-run that way, all five mutants (including `CLICK_SLOP = 0`) were killed.
+
+Second lesson, same incident: `git checkout -- <file>` reverts to the **committed** state, which
+for a file rewritten but not yet committed means discarding the whole rewrite. Commit before
+mutating, always.
+
+### Deferred
+
+Retired genomes accumulate in `garden.retired` and are never drawn — that is Milestone 4. Nothing
+persists across a reload, and the share codes are shown but not yet in the URL (Milestone 5).

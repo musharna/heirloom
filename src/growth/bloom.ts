@@ -20,8 +20,14 @@ export function layoutBloom(
   // the bloom reads as a pointed star instead of a flower. Even spacing is what real
   // single flowers do; the golden angle belongs between whorls, not inside one.
   const spacing = (Math.PI * 2) / perWhorl;
-  // Petals must be broad enough that neighbours touch, or the gaps read as star points.
-  const widthFactor = pheno.doubled ? 0.62 : 0.95;
+  // Petal width is set as a fraction of LENGTH so the silhouette stays longer-than-wide.
+  //
+  // A previous attempt required neighbouring petals to touch with no gap. On a 5-petal
+  // whorl that is geometrically impossible without width exceeding length, and it forced
+  // an aspect ratio of 1.05 — a square. Real 5-petal flowers (buttercup, wild rose,
+  // phlox) DO show gaps between petal tips; what makes them read as flowers is a broad
+  // obovate margin and a visible centre, not gapless coverage.
+  const widthFactor = pheno.doubled ? 0.42 : 0.66;
 
   for (let w = 0; w < whorls; w++) {
     const whorlScale = 1 - 0.22 * w;

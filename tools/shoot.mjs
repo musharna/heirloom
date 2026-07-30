@@ -5,7 +5,8 @@ const URL = process.env.LOOKDEV_URL ?? 'http://localhost:5173/lookdev/';
 
 mkdirSync('shots', { recursive: true });
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewportSize: { width: 960, height: 1120 } });
+// Wide enough for a 4-column grid of 300px panels, so the grid cannot reflow.
+const page = await browser.newPage({ viewportSize: { width: 1260, height: 1180 } });
 page.on('console', (m) => console.log(`[page:${m.type()}]`, m.text()));
 page.on('pageerror', (e) => {
   console.error('[pageerror]', e.message);

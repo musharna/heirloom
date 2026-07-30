@@ -27,8 +27,15 @@ export type Plot = { x: number; occupant: Planting | null };
 export type Garden = {
   plots: Plot[];
   tray: Seed[];
-  /** Genomes displaced from a plot. Milestone 4 composites these into the background. */
-  retired: Genome[];
+  /**
+   * Plantings displaced from a plot, in the order they were displaced.
+   *
+   * The whole planting, not just the genome: the background composites PIXELS, and a genome
+   * would have to be re-expressed and re-grown to produce any. Keeping the grown plant makes
+   * retirement a move rather than a rebuild. §7's replay list only needs the genomes, and
+   * those are still right here.
+   */
+  retired: Planting[];
   nextSeedId: number;
 };
 
@@ -121,7 +128,7 @@ export function plantSeed(
     ...g,
     plots,
     tray: g.tray.filter((s) => s.id !== seedId),
-    retired: plot.occupant ? [...g.retired, plot.occupant.genome] : g.retired,
+    retired: plot.occupant ? [...g.retired, plot.occupant] : g.retired,
   };
 }
 

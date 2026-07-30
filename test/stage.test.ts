@@ -42,6 +42,35 @@ describe("visibleSegments", () => {
   });
 });
 
+describe("silhouette rim colours", () => {
+  // Three consecutive critic rounds failed the art direction on "no visible linework".
+  // The contours were rendering the whole time; they were DARK on a near-black ground and
+  // therefore invisible. This pins the corrected rule: a rim that separates a silhouette
+  // from the ground must be LIGHTER than the ground.
+  const lum = (css: string): number => {
+    const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(css);
+    if (m) return (Number(m[1]) + Number(m[2]) + Number(m[3])) / 3;
+    const hex = css.replace("#", "");
+    return (
+      [0, 2, 4]
+        .map((i) => parseInt(hex.slice(i, i + 2), 16))
+        .reduce((a, b) => a + b) / 3
+    );
+  };
+
+  it("keeps every silhouette rim lighter than the ground", () => {
+    const ground = lum(PALETTE.ground);
+    for (const rim of [PALETTE.stemRim, PALETTE.leafRim, PALETTE.petalRim]) {
+      expect(lum(rim)).toBeGreaterThan(ground + 60);
+    }
+  });
+
+  it("still allows a DARK line for petal-on-petal divisions", () => {
+    // Those sit on a lit petal, not on the ground, so dark is correct there.
+    expect(lum(PALETTE.petalDivide)).toBeLessThan(lum(PALETTE.ground) + 60);
+  });
+});
+
 describe("plantBounds", () => {
   it("includes each bloom's full radius, not just its centre", () => {
     const plant = growPlant(P, 4, { x: 0, y: 0 });

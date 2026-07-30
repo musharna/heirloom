@@ -3,14 +3,25 @@ import type { Bloom, Phenotype, PetalSpec, Vec2 } from "../types";
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5)); // ~137.5 degrees
 
+/**
+ * @param openness 0..1 — how far this flower has opened, and how large it is relative to the
+ *   phenotype's full bloom size. Every bloom being 1.0 made a flower head read as a sheet of
+ *   identical stickers: no buds, no half-open flowers, no scale falloff toward the tips. Below
+ *   ~0.55 the flower is treated as a BUD — a tight cone of few petals rather than a small
+ *   open face, which is what a real unopened flower looks like.
+ */
 export function layoutBloom(
   pheno: Phenotype,
   center: Vec2,
   faceAngle: number,
   rand: () => number,
+  openness = 1,
+  tick = 0,
 ): Bloom {
-  const whorls = pheno.doubled ? 3 : 1;
-  const perWhorl = pheno.doubled ? 9 : 5;
+  const bud = openness < 0.55;
+  const radius = pheno.bloomRadius * (0.42 + 0.58 * openness);
+  const whorls = bud ? 1 : pheno.doubled ? 3 : 1;
+  const perWhorl = bud ? 3 : pheno.doubled ? 9 : 5;
   const petals: PetalSpec[] = [];
 
   // Petals are spaced EVENLY within a whorl (2*PI / perWhorl), and successive whorls are
@@ -37,8 +48,9 @@ export function layoutBloom(
       petals.push({
         center: { ...center },
         angle: faceAngle + w * GOLDEN + k * spacing,
-        length: pheno.bloomRadius * whorlScale * (0.9 + 0.2 * rand()),
-        width: pheno.bloomRadius * widthFactor * whorlScale,
+        // A bud's petals are short and clasped inward rather than spread.
+        length: radius * whorlScale * (0.9 + 0.2 * rand()) * (bud ? 0.72 : 1),
+        width: radius * widthFactor * whorlScale * (bud ? 0.8 : 1),
         shape: pheno.petalShape,
         colorDepth,
       });
@@ -56,8 +68,8 @@ export function layoutBloom(
     sepals.push({
       center: { ...center },
       angle: faceAngle + sepalSpacing / 2 + k * sepalSpacing,
-      length: pheno.bloomRadius * 0.82,
-      width: pheno.bloomRadius * 0.5,
+      length: radius * 0.82,
+      width: radius * 0.5,
       shape: "pointed",
       colorDepth: 0,
     });
@@ -72,12 +84,14 @@ export function layoutBloom(
 
   return {
     center: { ...center },
-    radius: pheno.bloomRadius,
+    radius,
     petals,
     sepals,
     hueClass: pheno.hueClass,
     white: pheno.white,
-    stamens: !pheno.doubled,
+    // A bud shows no stamen boss — it has not opened.
+    stamens: !pheno.doubled && !bud,
     tilt,
+    tick,
   };
 }

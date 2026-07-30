@@ -4,6 +4,7 @@ import { leafMidrib, leafPath } from "./leaves";
 import {
   fillPetal,
   petalColor,
+  petalFill,
   petalGlow,
   petalPath,
   petalRim,
@@ -236,8 +237,11 @@ export function paintPlant(
     }
   }
 
-  // Leaves sit above the stems they attach to but below the blooms.
+  // Leaves sit above the stems they attach to but below the blooms. Gated by tick like the
+  // stems: previously only segments were filtered, so a half-grown plant drew its full
+  // complement of leaves and flowers on frame one and only the stems animated.
   for (const lf of plant.leaves) {
+    if (lf.tick > untilTick) continue;
     const pts = leafPath(lf);
     if (pts.length < 3) continue;
     ctx.beginPath();
@@ -272,7 +276,10 @@ export function paintPlant(
   // those fused into chains: one panel collapsed ~85 centres into 29 blobs, the largest a
   // 20-deep "string of beads" draped across the canopy. Culling also opens the canopy so
   // branch geometry behind it becomes visible.
-  const blooms = cullOccludedBlooms(plant.blooms);
+  // Also gated by tick, so flowers appear as their shoots finish rather than all at once.
+  const blooms = cullOccludedBlooms(
+    plant.blooms.filter((b) => b.tick <= untilTick),
+  );
 
   // Glow radius and alpha cut hard. At 1.7x radius the halo measured an 18-27px ramp whose
   // pixel area equalled up to 100% of the drawn plant, roughly 20:1 against the 1px rim —
@@ -329,10 +336,16 @@ export function paintPlant(
       ctx.fill();
 
       for (const p of b.petals) {
-        const fill = petalColor(b.hueClass, b.white, p.colorDepth);
-        // Rim chosen relative to THIS fill's lightness, so a pale morph gets a dark
-        // outline. A fixed light rim cannot draw a white flower.
-        fillPetal(ctx, petalPath(p), fill, petalRim(b.white, p.colorDepth));
+        // Gradient along the petal axis, not a flat fill. A scanline across a petal used
+        // to return one byte-identical colour end to end, which is what made blooms read
+        // as vector clip-art. Rim is chosen relative to the fill's lightness, so a pale
+        // morph gets a dark outline — a fixed light rim cannot draw a white flower.
+        fillPetal(
+          ctx,
+          petalPath(p),
+          petalFill(ctx, p, b.hueClass, b.white),
+          petalRim(b.white, p.colorDepth),
+        );
       }
     });
   }

@@ -20,7 +20,10 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
   const blooms: Bloom[] = [];
 
   const maxTicks = Math.round(40 + 60 * pheno.vigour);
-  const stepLen = 3 + 5 * pheno.vigour;
+  // Sized so a max-vigour plant traces roughly 350 units — the scale of one garden plot.
+  // At the original 3 + 5*vigour a vigorous plant traced ~800 units and grew clean off a
+  // 340px canvas, taking its bloom with it.
+  const stepLen = 1.6 + 2.4 * pheno.vigour;
   let nextId = 0;
 
   let tips: Tip[] = [

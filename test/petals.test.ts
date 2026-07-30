@@ -1,6 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { petalPath, petalColor } from "../src/render/petals";
+import { petalPath, petalColor, petalGlow } from "../src/render/petals";
 import type { PetalSpec, PetalShape } from "../src/types";
+
+describe("petalGlow", () => {
+  it("tracks the bloom's own hue instead of a fixed colour", () => {
+    // A hardcoded glow put a pink halo around the blue and magenta blooms.
+    const seen = new Set([0, 1, 2, 3, 4].map((h) => petalGlow(h, false, 0.2)));
+    expect(seen.size).toBe(5);
+  });
+
+  it("carries the requested alpha, including fully transparent for gradient stops", () => {
+    expect(petalGlow(0, false, 0.2)).toContain("/ 0.2");
+    expect(petalGlow(0, false, 0)).toContain("/ 0");
+    expect(petalGlow(0, true, 0.26)).toContain("/ 0.26");
+  });
+});
 
 const spec = (shape: PetalShape, angle = 0): PetalSpec => ({
   center: { x: 0, y: 0 },

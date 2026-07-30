@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Heirloom lookdev</title>
+    <style>
+      body {
+        margin: 0;
+        background: #0d1013;
+        color: #8a9a92;
+        font:
+          12px/1.4 ui-monospace,
+          monospace;
+      }
+      #grid {
+        display: grid;
+        grid-template-columns: repeat(3, 300px);
+        gap: 4px;
+        padding: 8px;
+      }
+      figure {
+        margin: 0;
+      }
+      figcaption {
+        padding: 2px 4px;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="grid"></div>
+    <script type="module" src="./lookdev.ts"></script>
+  </body>
+</html>

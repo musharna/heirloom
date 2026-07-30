@@ -47,6 +47,20 @@ export function petalColor(
   return `hsl(${h} ${70 - 10 * colorDepth}% ${62 - 26 * colorDepth}%)`;
 }
 
+/**
+ * Translucent glow matching the bloom's own hue. A hardcoded glow colour put a pink halo
+ * around blue and magenta flowers, which read as a lighting bug rather than as bloom.
+ */
+export function petalGlow(
+  hueClass: number,
+  white: boolean,
+  alpha: number,
+): string {
+  if (white) return `hsl(45 28% 93% / ${alpha})`;
+  const h = HUES[hueClass] ?? HUES[0]!;
+  return `hsl(${h} 85% 66% / ${alpha})`;
+}
+
 /** Thin canvas wrapper. No logic worth testing. */
 export function fillPetal(
   ctx: CanvasRenderingContext2D,
@@ -61,7 +75,8 @@ export function fillPetal(
   ctx.closePath();
   ctx.fillStyle = fill;
   ctx.fill();
+  // The petal edge IS the line-art of the art direction, so it has to actually read.
   ctx.strokeStyle = stroke;
-  ctx.lineWidth = 0.6;
+  ctx.lineWidth = 1;
   ctx.stroke();
 }

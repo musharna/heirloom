@@ -35,11 +35,36 @@ describe("layoutBloom", () => {
     expect(b.stamens).toBe(false);
   });
 
-  it("spaces petals by the golden angle", () => {
+  it("spaces petals evenly WITHIN a whorl", () => {
+    // Golden-angle spacing inside a small whorl leaves uneven gaps and the bloom renders
+    // as a pointed star. Even spacing is the corrected model; this test pins it.
+    const b = layoutBloom(SINGLE, c, 0, mulberry32(1));
+    const spacing = (Math.PI * 2) / 5;
+    for (let i = 1; i < b.petals.length; i++) {
+      expect(b.petals[i]!.angle - b.petals[i - 1]!.angle).toBeCloseTo(
+        spacing,
+        5,
+      );
+    }
+  });
+
+  it("offsets successive whorls by the golden angle so they interleave", () => {
     const b = layoutBloom(DOUBLE, c, 0, mulberry32(1));
     const golden = Math.PI * (3 - Math.sqrt(5));
-    const d = b.petals[1]!.angle - b.petals[0]!.angle;
-    expect(d).toBeCloseTo(golden, 5);
+    const perWhorl = b.petals.length / 3;
+    const firstOfWhorl = (w: number) => b.petals[w * perWhorl]!.angle;
+    expect(firstOfWhorl(1) - firstOfWhorl(0)).toBeCloseTo(golden, 5);
+    expect(firstOfWhorl(2) - firstOfWhorl(1)).toBeCloseTo(golden, 5);
+  });
+
+  it("makes petals broad enough to touch their neighbours", () => {
+    // Narrow petals leave visible gaps and read as star points rather than a flower.
+    const b = layoutBloom(SINGLE, c, 0, mulberry32(1));
+    const p = b.petals[0]!;
+    // Chord subtended by the petal must reach the neighbour's spacing at mid-length.
+    const spacing = (Math.PI * 2) / 5;
+    const neighbourGap = 2 * (p.length / 2) * Math.sin(spacing / 2);
+    expect(p.width).toBeGreaterThanOrEqual(neighbourGap * 0.9);
   });
 
   it("makes inner whorls smaller and darker", () => {

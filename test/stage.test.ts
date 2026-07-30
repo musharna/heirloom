@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { visibleSegments, PALETTE } from "../src/render/stage";
+import {
+  visibleSegments,
+  PALETTE,
+  plantBounds,
+  fitPlant,
+} from "../src/render/stage";
 import { growPlant } from "../src/growth/sim";
 import type { Phenotype } from "../src/types";
 
@@ -34,6 +39,48 @@ describe("visibleSegments", () => {
   it("shows nothing before growth starts", () => {
     const plant = growPlant(P, 4, { x: 0, y: 0 });
     expect(visibleSegments(plant, -1)).toHaveLength(0);
+  });
+});
+
+describe("plantBounds", () => {
+  it("includes each bloom's full radius, not just its centre", () => {
+    const plant = growPlant(P, 4, { x: 0, y: 0 });
+    const b = plantBounds(plant);
+    const bloom = plant.blooms[0]!;
+    expect(b.minX).toBeLessThanOrEqual(bloom.center.x - bloom.radius);
+    expect(b.maxY).toBeGreaterThanOrEqual(bloom.center.y - bloom.radius);
+  });
+});
+
+describe("fitPlant", () => {
+  it("shrinks an oversized plant so its whole extent lands inside the viewport", () => {
+    // The defect this guards: a vigorous plant grew past the canvas and took its bloom
+    // off-screen, leaving a bare stem with no flower.
+    const big = growPlant({ ...P, vigour: 1 }, 3, { x: 0, y: 0 });
+    const W = 300;
+    const H = 340;
+    const pad = 14;
+    const f = fitPlant(big, W, H, pad);
+    const b = plantBounds(big);
+    for (const [x, y] of [
+      [b.minX, b.minY],
+      [b.maxX, b.maxY],
+    ] as const) {
+      const sx = x * f.scale + f.dx;
+      const sy = y * f.scale + f.dy;
+      expect(sx).toBeGreaterThanOrEqual(pad - 1e-6);
+      expect(sx).toBeLessThanOrEqual(W - pad + 1e-6);
+      expect(sy).toBeGreaterThanOrEqual(-1e-6);
+      expect(sy).toBeLessThanOrEqual(H - pad + 1e-6);
+    }
+  });
+
+  it("never magnifies, so a compact plant stays smaller than a vigorous one", () => {
+    const small = growPlant({ ...P, vigour: 0.15, branchiness: 0 }, 3, {
+      x: 0,
+      y: 0,
+    });
+    expect(fitPlant(small, 3000, 3000).scale).toBe(1);
   });
 });
 

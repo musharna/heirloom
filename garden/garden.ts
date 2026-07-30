@@ -3,6 +3,7 @@ import {
   cloneOf,
   createGarden,
   crossOf,
+  grow,
   plantSeed,
   sowFounders,
   spliceSeeds,
@@ -15,8 +16,9 @@ import {
   shownBlooms as bloomsOf,
   traySlot,
 } from "../src/game/hit";
+import { SAVE_KEY, fromSave, toSave, type ReplayEntry } from "../src/game/save";
 import type { Genome } from "../src/genome/genome";
-import { genomeSeed, serialize } from "../src/genome/serialize";
+import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
 import { mulberry32 } from "../src/rng";
 import {
@@ -64,12 +66,78 @@ const plotXs = Array.from({ length: PLOTS }, (_, i) => {
 });
 
 const rand = mulberry32(Date.now() & 0x7fffffff);
-let garden: Garden = sowFounders(
-  createGarden(plotXs),
-  FOUNDERS,
-  SOIL,
-  mulberry32(20260730),
-);
+
+/**
+ * The running retirement history.
+ *
+ * Owned here rather than read back off `garden.retired`, because a restored garden's `retired`
+ * is empty — its plants went straight into the background buffer. Deriving the save from it
+ * would write an empty replay on the first save after every reload and erase the player's
+ * history one session at a time.
+ */
+let retirementLog: ReplayEntry[] = [];
+/** Non-empty while something needs saying out loud — a rejected save or a bad share link. */
+let notice = "";
+
+let garden: Garden;
+let restored: { genome: Genome; x: number }[] = [];
+
+const stored = localStorage.getItem(SAVE_KEY);
+if (stored) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stored);
+  } catch (e) {
+    parsed = null;
+    notice = `saved garden is not valid JSON: ${(e as Error).message}`;
+  }
+  const loaded = parsed === null ? null : fromSave(parsed, plotXs, SOIL);
+  if (loaded?.ok) {
+    garden = loaded.garden;
+    restored = loaded.replay;
+    retirementLog = loaded.replay.map((r) => ({
+      g: serialize(r.genome),
+      x: r.x,
+    }));
+  } else {
+    // Loud, not silent. A save that quietly resets is the worst possible outcome: the player
+    // loses a breeding history and is told nothing, and the bug that ate it leaves no trace.
+    if (loaded && !loaded.ok)
+      notice = `saved garden rejected — ${loaded.error}`;
+    console.error("[heirloom] could not load saved garden:", notice);
+    garden = sowFounders(createGarden(plotXs), FOUNDERS, SOIL, rand);
+  }
+} else {
+  garden = sowFounders(createGarden(plotXs), FOUNDERS, SOIL, rand);
+}
+
+/**
+ * Take a shared genome from the URL fragment, if there is one.
+ *
+ * Untrusted input, so §10 applies: validate, and reject VISIBLY naming what failed rather
+ * than substituting a default.
+ *
+ * Run on load AND on `hashchange`. Changing only the fragment does not reload a page, so a
+ * link pasted into a tab that already has the garden open would otherwise do nothing at all —
+ * silently, which is the worst version of not working. The fragment is then cleared, so a
+ * later refresh does not plant the same gift seed a second time.
+ */
+function takeSharedGenome(): void {
+  const shared = /[#&]g=([A-Za-z0-9_-]+)/.exec(location.hash);
+  if (!shared) return;
+  const r = parseGenome(shared[1]!);
+  if (r.ok) {
+    garden = addSeed(garden, r.genome);
+    notice = "a shared seed was added to your tray";
+    scheduleSave();
+  } else {
+    notice = `that shared link is not a genome — ${r.error}`;
+  }
+  window.history.replaceState(null, "", location.pathname + location.search);
+}
+
+window.addEventListener("hashchange", takeSharedGenome);
+
 let now = 0;
 
 /**
@@ -81,6 +149,46 @@ let now = 0;
  */
 const forest = new Forest(W, H, dpr);
 let composited = 0;
+
+// Rebuild the background from the replay list rather than from a stored image (§7). Genomes
+// are re-expressed and re-grown, which is what lets a saved garden survive a change to the
+// growth engine or the renderer — a stored bitmap would pin every past plant to the code that
+// drew it. Costs one growPlant per entry, capped at REPLAY_CAP.
+for (const entry of restored) {
+  forest.retire(
+    grow(entry.genome, entry.x, SOIL).plant,
+    genomeSeed(entry.genome),
+  );
+}
+
+/**
+ * Persist on a trailing debounce.
+ *
+ * Every verb mutates the garden, and serializing a whole garden on each one would run on the
+ * same frame as a drag. 700ms after the last change is imperceptible to a player and collapses
+ * a burst of clicks into one write.
+ */
+let saveTimer = 0;
+function scheduleSave(): void {
+  clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    try {
+      localStorage.setItem(
+        SAVE_KEY,
+        JSON.stringify(toSave(garden, now, retirementLog)),
+      );
+    } catch (e) {
+      // Quota exceeded, private mode, disabled storage. Say so — a garden that silently
+      // stops saving looks exactly like one that is saving fine until the tab closes.
+      notice = `could not save: ${(e as Error).message}`;
+      console.error("[heirloom] save failed:", e);
+    }
+  }, 700);
+}
+
+// Called HERE, not at the point of definition: takeSharedGenome may schedule a save, and
+// `saveTimer` above is a `let` — invoking it any earlier would hit the temporal dead zone.
+takeSharedGenome();
 
 /**
  * What the pointer is currently carrying.
@@ -137,6 +245,14 @@ canvas.addEventListener("pointermove", (e) => {
 });
 
 canvas.addEventListener("pointerup", (e) => {
+  release(e);
+  // One call covering every branch, rather than one per verb. The handler has four early
+  // returns, and a per-branch save is exactly the shape where the fifth branch added later
+  // forgets to persist and the loss only shows up on the next reload.
+  scheduleSave();
+});
+
+function release(e: PointerEvent): void {
   const p = toCanvas(e);
   const d = drag;
   drag = null;
@@ -172,7 +288,7 @@ canvas.addEventListener("pointerup", (e) => {
     garden = plantSeed(garden, d.id, plot, SOIL, now);
     flash = { at: { x: plotXs[plot]!, y: SOIL }, until: now + FLASH_TICKS };
   }
-});
+}
 
 canvas.addEventListener("pointerleave", () => {
   pointer = { x: -1, y: -1 };
@@ -229,7 +345,12 @@ function frame(): void {
   while (composited < garden.retired.length) {
     const gone = garden.retired[composited]!;
     forest.retire(gone.plant, genomeSeed(gone.genome));
+    retirementLog.push({
+      g: serialize(gone.genome),
+      x: gone.plant.segments[0]?.x0 ?? W / 2,
+    });
     composited++;
+    scheduleSave();
   }
 
   paintStage(ctx, W, H, SOIL);
@@ -300,14 +421,47 @@ function frame(): void {
     paintHalo(flash.at, 10 + 34 * (1 - k), 0.55 * k);
   }
 
-  hintEl.textContent = hint();
-  codeEl.textContent = garden.tray.length
-    ? serialize(garden.tray.at(-1)!.genome)
-    : "";
+  // A notice outranks the hint. It is the only channel for "your save was rejected" or "that
+  // share link is not a genome", and burying either under a hint would be silent failure with
+  // extra steps.
+  hintEl.textContent = notice || hint();
+  hintEl.classList.toggle("notice", Boolean(notice));
+
+  const share = garden.tray.length ? serialize(garden.tray.at(-1)!.genome) : "";
+  if (share !== lastShare) {
+    lastShare = share;
+    codeEl.textContent = share ? `${share} — copy link` : "";
+  }
 
   now += SPEED;
   requestAnimationFrame(frame);
 }
+
+let lastShare = "";
+
+/** The share URL for a genome: the code lives in the fragment, so it never hits a server. */
+function shareUrl(code: string): string {
+  return `${location.origin}${location.pathname}#g=${code}`;
+}
+
+codeEl.addEventListener("click", () => {
+  if (!garden.tray.length) return;
+  const code = serialize(garden.tray.at(-1)!.genome);
+  void navigator.clipboard
+    .writeText(shareUrl(code))
+    .then(() => {
+      notice =
+        "link copied — it grows this exact flower for anyone who opens it";
+      setTimeout(() => {
+        notice = "";
+      }, 3200);
+    })
+    .catch((e: Error) => {
+      // Clipboard access is permission-gated and fails in plenty of contexts. Show the URL
+      // so the player can still copy it by hand rather than being told nothing happened.
+      notice = `could not copy (${e.message}) — ${shareUrl(code)}`;
+    });
+});
 
 function hint(): string {
   if (drag?.kind === "seed") {
@@ -359,6 +513,13 @@ Object.assign(window as unknown as Record<string, unknown>, {
           }))
         : [],
     ),
+  /** Serialized genomes, for asserting a save round-tripped the actual plants. */
+  __codes: () => ({
+    plots: garden.plots.map((p) =>
+      p.occupant ? serialize(p.occupant.genome) : null,
+    ),
+    tray: garden.tray.map((s) => serialize(s.genome)),
+  }),
   __traySlot: (i: number) => traySlot(i, W, H),
   __plotX: (i: number) => plotXs[i],
   __soil: SOIL,

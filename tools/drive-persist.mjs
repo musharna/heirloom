@@ -32,7 +32,7 @@ await page.evaluate(() => localStorage.clear());
 await page.reload({ waitUntil: 'networkidle' });
 let box = await ready();
 
-const size = await page.evaluate(() => window.__size);
+const size = await page.evaluate(() => window.__size());
 const toPage = (p) => ({
   x: box.x + (p.x * box.width) / size.w,
   y: box.y + (p.y * box.height) / size.h,

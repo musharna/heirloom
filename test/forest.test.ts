@@ -124,3 +124,35 @@ describe("placeRetired", () => {
     }
   });
 });
+
+describe("scatter scales with the world", () => {
+  it("keeps a retired plant on the canvas at every world width", () => {
+    // The defect: a fixed 340px scatter is 29% of a 1180-wide desktop world but 86% of a
+    // 396-wide phone world. On a phone, retired plants were flung off the canvas entirely
+    // and the background came back with `depth 1, coverage 0` — a layer composited and
+    // drawn nowhere. Intermittent, because it needed a narrow world to show up.
+    const rand = mulberry32(77);
+    for (const worldW of [360, 396, 560, 847, 1180]) {
+      for (let i = 0; i < 200; i++) {
+        const p = placeRetired(genomeSeed(randomGenome(rand)), i, worldW);
+        // An origin anywhere on the bed plus this offset must stay within the world, with
+        // room for the canopy either side.
+        expect(Math.abs(p.dx), `world ${worldW}`).toBeLessThan(worldW * 0.25);
+      }
+    }
+  });
+
+  it("CONTROL: a fixed scatter escapes a narrow world", () => {
+    // Pins that the assertion above discriminates — the shipped 340px span against a
+    // 396-wide world.
+    expect(Math.abs(-170)).toBeGreaterThan(396 * 0.25);
+  });
+
+  it("still scatters widely on a desktop world", () => {
+    const rand = mulberry32(78);
+    const xs = Array.from({ length: 300 }, (_, i) =>
+      placeRetired(genomeSeed(randomGenome(rand)), i, 1180).dx,
+    );
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(250);
+  });
+});

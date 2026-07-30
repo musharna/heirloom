@@ -16,6 +16,7 @@ import {
   shownBlooms as bloomsOf,
   traySlot,
 } from "../src/game/hit";
+import { computeLayout, layoutChanged, type Layout } from "../src/game/layout";
 import { SAVE_KEY, fromSave, toSave, type ReplayEntry } from "../src/game/save";
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
@@ -29,34 +30,28 @@ import {
 } from "../src/render/stage";
 import type { Vec2 } from "../src/types";
 
-const W = 1180;
-/**
- * Sized to what the plants actually occupy, not to a round number. At 520 with the soil at
- * 440 the tallest founder topped out around 40% of the frame and the upper 60% was empty
- * sky — the growth engine's plants are roughly 250px tall, so the headroom above them was
- * larger than the plants themselves.
- */
-const H = 470;
-/**
- * Deep enough that the tray rests ON the dirt rather than floating below the frame, shallow
- * enough that the band does not become a slab. At 108px it read as a caption strip; the
- * gradient in paintSoil does the rest of the work.
- */
-const SOIL = 390;
-const PLOTS = 6;
-/** Two thirds sown. The empty plots are the invitation to plant something. */
-const FOUNDERS = 4;
 /** Ticks per frame. Unhurried without being tedious. */
 const SPEED = 1.4;
+
+/**
+ * World geometry, from the viewport. Reassignable rather than constant: a phone rotated to
+ * landscape is a genuinely different garden, not the same garden shrunk.
+ */
+let {
+  W,
+  H,
+  soil: SOIL,
+  plotXs,
+} = computeLayout(window.innerWidth, window.innerHeight);
+/** Two thirds of the bed sown. The empty plots are the invitation to plant something. */
+const foundersFor = (plots: number): number =>
+  Math.max(1, Math.round(plots * 0.67));
 
 const canvas = document.getElementById("c") as HTMLCanvasElement;
 const hintEl = document.getElementById("hint")!;
 const codeEl = document.getElementById("code")!;
 const dpr = Math.min(2, window.devicePixelRatio || 1);
-canvas.width = W * dpr;
-canvas.height = H * dpr;
 const ctx = canvas.getContext("2d")!;
-ctx.scale(dpr, dpr);
 
 /**
  * Size the canvas box to the viewport WITHOUT distorting it.
@@ -80,14 +75,16 @@ function fitCanvas(): void {
   canvas.style.width = `${Math.round(W * scale)}px`;
   canvas.style.height = `${Math.round(H * scale)}px`;
 }
-fitCanvas();
-window.addEventListener("resize", fitCanvas);
-window.addEventListener("orientationchange", fitCanvas);
 
-const plotXs = Array.from({ length: PLOTS }, (_, i) => {
-  const inset = 135;
-  return inset + (i / (PLOTS - 1)) * (W - inset * 2);
-});
+/** Resizing a canvas RESETS its transform, so the dpr scale has to be re-applied. */
+function applyCanvasSize(): void {
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  fitCanvas();
+}
+applyCanvasSize();
 
 const rand = mulberry32(Date.now() & 0x7fffffff);
 
@@ -129,10 +126,20 @@ if (stored) {
     if (loaded && !loaded.ok)
       notice = `saved garden rejected — ${loaded.error}`;
     console.error("[heirloom] could not load saved garden:", notice);
-    garden = sowFounders(createGarden(plotXs), FOUNDERS, SOIL, rand);
+    garden = sowFounders(
+      createGarden(plotXs),
+      foundersFor(plotXs.length),
+      SOIL,
+      rand,
+    );
   }
 } else {
-  garden = sowFounders(createGarden(plotXs), FOUNDERS, SOIL, rand);
+  garden = sowFounders(
+    createGarden(plotXs),
+    foundersFor(plotXs.length),
+    SOIL,
+    rand,
+  );
 }
 
 /**
@@ -171,7 +178,7 @@ let now = 0;
  * frame — rather than compositing inside the pointer handler — means every path that retires
  * a plant is covered automatically, including any future one.
  */
-const forest = new Forest(W, H, dpr);
+let forest = new Forest(W, H, dpr);
 let composited = 0;
 
 // Rebuild the background from the replay list rather than from a stored image (§7). Genomes
@@ -180,10 +187,85 @@ let composited = 0;
 // drew it. Costs one growPlant per entry, capped at REPLAY_CAP.
 for (const entry of restored) {
   forest.retire(
-    grow(entry.genome, entry.x, SOIL).plant,
+    grow(entry.genome, clampToBed(entry.x), SOIL).plant,
     genomeSeed(entry.genome),
   );
 }
+
+/** A retired plant's x may predate a narrower world; keep it on the bed. */
+function clampToBed(x: number): number {
+  return Math.min(W - 24, Math.max(24, x));
+}
+
+/**
+ * Re-shape the world when the viewport changes enough to matter.
+ *
+ * A phone rotated to landscape is a different garden, not the same garden scaled: it has room
+ * for more plots. `layoutChanged` gates this because the work is real — one `growPlant` per
+ * occupant plus a full rebuild of the background buffer — and most resize events (dragging a
+ * window edge on a desktop) land on the same world.
+ *
+ * Plants keep their genome and their age; only their origin moves. Growth is deterministic
+ * from the genome, so re-growing at a new x gives the identical plant translated, not a
+ * different one — which is the whole reason the growth seed excludes the plot.
+ */
+function relayout(): void {
+  const next = computeLayout(window.innerWidth, window.innerHeight);
+  const current: Layout = { W, H, soil: SOIL, plotXs };
+  if (!layoutChanged(current, next)) {
+    fitCanvas(); // the world is the same; the box may still need re-fitting
+    return;
+  }
+
+  ({ W, H, soil: SOIL, plotXs } = next);
+  applyCanvasSize();
+
+  // Occupants are re-seated in order. If the new bed has fewer plots, the surplus RETIRES
+  // rather than vanishing — which is what retirement already means here, and leaves the
+  // plants in the background instead of deleting them.
+  const occupants = garden.plots
+    .map((p) => p.occupant)
+    .filter((o): o is NonNullable<typeof o> => o !== null);
+  const keep = occupants.slice(0, plotXs.length);
+  // Surplus plants are RE-GROWN into the new world before retiring, not moved across as-is.
+  // Their geometry was built around a plot that no longer exists: a plant grown at x=728 in a
+  // landscape world composites almost entirely off the edge of a 396-wide portrait one, and
+  // the background came back with 157 covered pixels for two whole plants.
+  const surplus = occupants.slice(plotXs.length).map((o) => ({
+    ...grow(o.genome, clampToBed(o.plant.segments[0]?.x0 ?? W / 2), SOIL),
+    plantedAt: o.plantedAt,
+  }));
+
+  garden = {
+    ...garden,
+    plots: plotXs.map((x, i) => {
+      const o = keep[i];
+      return {
+        x,
+        occupant: o
+          ? { ...grow(o.genome, x, SOIL), plantedAt: o.plantedAt }
+          : null,
+      };
+    }),
+    retired: [...garden.retired, ...surplus],
+  };
+
+  // The buffer is the wrong size now. Rebuild it from the durable log; `composited` is left
+  // alone, so the frame loop still composites the surplus and appends it to the log itself.
+  forest = new Forest(W, H, dpr);
+  for (const entry of retirementLog) {
+    const g = parseGenome(entry.g);
+    if (!g.ok) continue; // a corrupt log entry must not take the whole background down
+    forest.retire(
+      grow(g.genome, clampToBed(entry.x), SOIL).plant,
+      genomeSeed(g.genome),
+    );
+  }
+  scheduleSave();
+}
+
+window.addEventListener("resize", relayout);
+window.addEventListener("orientationchange", relayout);
 
 /**
  * Persist on a trailing debounce.
@@ -545,7 +627,8 @@ Object.assign(window as unknown as Record<string, unknown>, {
     tray: garden.tray.map((s) => serialize(s.genome)),
   }),
   __traySlot: (i: number) => traySlot(i, W, H),
+  __plotCount: () => plotXs.length,
   __plotX: (i: number) => plotXs[i],
   __soil: SOIL,
-  __size: { w: W, h: H },
+  __size: () => ({ w: W, h: H }),
 });

@@ -1,4 +1,5 @@
 import { mulberry32, angleDelta } from "../rng";
+import { layoutBloom } from "./bloom";
 import type {
   Phenotype,
   Plant,
@@ -7,23 +8,6 @@ import type {
   Vec2,
   Bloom,
 } from "../types";
-
-// TEMPORARY — replaced by a real import in Task 3.
-function layoutBloom(
-  pheno: Phenotype,
-  center: Vec2,
-  _face: number,
-  _rand: () => number,
-): Bloom {
-  return {
-    center: { ...center },
-    radius: pheno.bloomRadius,
-    petals: [],
-    hueClass: pheno.hueClass,
-    white: pheno.white,
-    stamens: !pheno.doubled,
-  };
-}
 
 const MIN_WIDTH = 0.6;
 const MAX_TIPS = 400;

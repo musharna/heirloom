@@ -55,10 +55,34 @@ const codeEl = document.getElementById("code")!;
 const dpr = Math.min(2, window.devicePixelRatio || 1);
 canvas.width = W * dpr;
 canvas.height = H * dpr;
-canvas.style.width = `${W}px`;
-canvas.style.height = `${H}px`;
 const ctx = canvas.getContext("2d")!;
 ctx.scale(dpr, dpr);
+
+/**
+ * Size the canvas box to the viewport WITHOUT distorting it.
+ *
+ * The CSS was `max-width: 100vw` against an inline `height: 470px`. On a phone that clamps
+ * the width to 412 and leaves the height alone, so 1180x470 of content — aspect 2.51 — was
+ * being painted into a box of aspect 0.88: a 2.9x horizontal squash. It looked fine on every
+ * desktop viewport, which is why it survived until the site was reachable from a phone.
+ *
+ * Both dimensions are set from ONE scale factor, so the box can never disagree with the
+ * drawing buffer's proportions whatever the viewport does. Never magnifies past 1: the art is
+ * authored at this size and upscaling it just softens the linework.
+ */
+function fitCanvas(): void {
+  const margin = 8;
+  const scale = Math.min(
+    1,
+    (window.innerWidth - margin * 2) / W,
+    (window.innerHeight - 74) / H, // leave the HUD its line
+  );
+  canvas.style.width = `${Math.round(W * scale)}px`;
+  canvas.style.height = `${Math.round(H * scale)}px`;
+}
+fitCanvas();
+window.addEventListener("resize", fitCanvas);
+window.addEventListener("orientationchange", fitCanvas);
 
 const plotXs = Array.from({ length: PLOTS }, (_, i) => {
   const inset = 135;

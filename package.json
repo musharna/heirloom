@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit",
     "shoot": "node tools/shoot-garden.mjs",
     "shoot:lookdev": "node tools/shoot.mjs",
-    "drive": "node tools/drive-verbs.mjs && node tools/drive-forest.mjs && node tools/drive-persist.mjs"
+    "drive": "node tools/drive-verbs.mjs && node tools/drive-forest.mjs && node tools/drive-persist.mjs && node tools/check-viewports.mjs"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

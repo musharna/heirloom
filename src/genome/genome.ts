@@ -86,23 +86,92 @@ function polyGamete(block: PolyBlock, rand: () => number): number {
   return out;
 }
 
+/**
+ * Founder allele frequencies. NOT uniform, and the difference is visible on screen.
+ *
+ * Drawing every allele at 0.5 seems like the neutral choice and is not. Two failures showed
+ * up the moment expressed genomes drove the garden instead of hand-written phenotypes:
+ *
+ *   - `W` is DOMINANT, so frequency 0.5 masks 3/4 of the population. Every founder flower
+ *     came out white and the hue loci may as well not have existed.
+ *   - `P` is a dominance SERIES, so equal allele frequencies do not give equal shapes. The
+ *     top allele shows whenever either copy carries it: 44% frilled, 6% round.
+ *
+ * The `P` weights below are solved backwards from wanting all four shapes roughly equally
+ * often. A shape shows when it is the highest-ranked allele present, so with cumulative
+ * frequency C(k) over ranks at-or-below k, P(shape k) = C(k)² − C(k−1)². Setting each to
+ * 1/4 gives C = (1, .866, .5) and the weights are the differences.
+ */
+const FOUNDER = {
+  /** P(the pigment-block allele `W`). Low: white must be uncommon enough to be a surprise. */
+  W: 0.08,
+  /** P(`D`, single). 0.5 leaves a quarter of founders doubled. */
+  D: 0.5,
+  /** Rank-ordered: frilled, lobed, pointed, round. */
+  P: [0.134, 0.159, 0.207, 0.5],
+} as const;
+
+function weighted<T>(
+  items: readonly T[],
+  weights: readonly number[],
+  rand: () => number,
+): T {
+  const total = weights.reduce((a, b) => a + b, 0);
+  let r = rand() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i]!;
+    if (r <= 0) return items[i]!;
+  }
+  return items[items.length - 1]!;
+}
+
+/**
+ * A founder polygenic block: draw ONE frequency for the whole block, then every locus at
+ * that frequency.
+ *
+ * The hierarchical draw is the whole point. Twelve fair coins is a binomial concentrated on
+ * dosage 6 — sd 1.7 out of a 0..12 range — so every founder came out with the same mid-range
+ * habit and the bed read as seven copies of one plant. Drawing p ~ U(0,1) first makes the
+ * marginal dosage distribution exactly UNIFORM over 0..12 (a beta(1,1)-binomial), which is
+ * the spread a founder collection of distinct cultivars actually has.
+ *
+ * This is a statement about FOUNDERS only. Once breeding starts, `inherit` mixes blocks
+ * locus-by-locus and the population drifts back toward a normal distribution — which is
+ * correct, and is what makes selection feel like it is doing something.
+ */
 function randomPoly(rand: () => number): PolyBlock {
+  const p = rand();
   let a = 0;
   let b = 0;
   for (let i = 0; i < POLY_LOCI; i++) {
-    if (rand() < 0.5) a |= 1 << i;
-    if (rand() < 0.5) b |= 1 << i;
+    if (rand() < p) a |= 1 << i;
+    if (rand() < p) b |= 1 << i;
   }
   return { a, b };
 }
 
 export function randomGenome(rand: () => number): Genome {
+  // One hue frequency per founder, for the same reason as the polygenic blocks: four fair
+  // coins would pile 3/8 of the population into hue class 2 and leave 1/16 at each end.
+  const hueP = rand();
+  const hue = <A extends string>(pair: readonly [A, A]): A =>
+    rand() < hueP ? pair[0] : pair[1];
+
   return {
-    W: [pick(W_ALLELES, rand), pick(W_ALLELES, rand)],
-    H1: [pick(H1_ALLELES, rand), pick(H1_ALLELES, rand)],
-    H2: [pick(H2_ALLELES, rand), pick(H2_ALLELES, rand)],
-    D: [pick(D_ALLELES, rand), pick(D_ALLELES, rand)],
-    P: [pick(P_ALLELES, rand), pick(P_ALLELES, rand)],
+    W: [
+      weighted(W_ALLELES, [FOUNDER.W, 1 - FOUNDER.W], rand),
+      weighted(W_ALLELES, [FOUNDER.W, 1 - FOUNDER.W], rand),
+    ],
+    H1: [hue(H1_ALLELES), hue(H1_ALLELES)],
+    H2: [hue(H2_ALLELES), hue(H2_ALLELES)],
+    D: [
+      weighted(D_ALLELES, [FOUNDER.D, 1 - FOUNDER.D], rand),
+      weighted(D_ALLELES, [FOUNDER.D, 1 - FOUNDER.D], rand),
+    ],
+    P: [
+      weighted(P_ALLELES, FOUNDER.P, rand),
+      weighted(P_ALLELES, FOUNDER.P, rand),
+    ],
     V: randomPoly(rand),
     G: randomPoly(rand),
     B: randomPoly(rand),

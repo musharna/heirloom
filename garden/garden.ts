@@ -1,3 +1,6 @@
+import { express } from "../src/genome/express";
+import { randomGenome, type Genome } from "../src/genome/genome";
+import { genomeSeed, serialize } from "../src/genome/serialize";
 import { growPlant } from "../src/growth/sim";
 import { mulberry32 } from "../src/rng";
 import {
@@ -6,7 +9,7 @@ import {
   paintStage,
   soilLine,
 } from "../src/render/stage";
-import type { PetalShape, Phenotype, Plant } from "../src/types";
+import type { Plant } from "../src/types";
 
 const W = 1180;
 // Sized so a full-grown bed roughly fills the frame. At 560 the plants topped out around
@@ -14,39 +17,16 @@ const W = 1180;
 const H = 430;
 const PLOTS = 7;
 
-/**
- * A random plausible phenotype.
- *
- * Milestone 2 replaces this with express(genome) — the point here is only to show what the
- * growth engine's range actually looks like. The lookdev sheet deliberately shares ONE seed
- * across every panel to isolate a single gene, which also means it shows the same plant
- * twelve times and hides all of this.
- */
-function randomPhenotype(rand: () => number): Phenotype {
-  const shapes: PetalShape[] = ["round", "pointed", "lobed", "frilled"];
-  const doubled = rand() < 0.3;
-  return {
-    vigour: 0.35 + 0.65 * rand(),
-    droop: rand() < 0.25 ? 0.6 + 0.4 * rand() : 0.1 + 0.25 * rand(),
-    phototropism: 0.4 + 0.3 * rand(),
-    stiffness: 0.2 + 0.4 * rand(),
-    branchiness: 0.25 + 0.7 * rand(),
-    baseWidth: 7 + 5 * rand(),
-    taper: 0.974 + 0.008 * rand(),
-    branchAngle: 0.38 + 0.4 * rand(),
-    branchWidthRatio: 0.62 + 0.16 * rand(),
-    doubled,
-    petalShape: shapes[Math.floor(rand() * shapes.length)]!,
-    hueClass: Math.floor(rand() * 5) as 0 | 1 | 2 | 3 | 4,
-    white: rand() < 0.16,
-    bloomRadius: 15 + 12 * rand(),
-  };
-}
-
-type Bed = { plant: Plant; startTick: number; maxTick: number };
+type Bed = {
+  genome: Genome;
+  plant: Plant;
+  startTick: number;
+  maxTick: number;
+};
 
 const canvas = document.getElementById("c") as HTMLCanvasElement;
 const statusEl = document.getElementById("status")!;
+const codesEl = document.getElementById("codes")!;
 const dpr = Math.min(2, window.devicePixelRatio || 1);
 canvas.width = W * dpr;
 canvas.height = H * dpr;
@@ -66,28 +46,41 @@ function plant(seed: number): void {
   const soil = soilLine(H);
   beds = [];
   for (let i = 0; i < PLOTS; i++) {
-    const pheno = randomPhenotype(rand);
+    const genome = randomGenome(rand);
     // Spread the plots across the bed, jittered so they are not a metronome, then inset from
     // the edges — a plant's canopy spreads well past its plot, and unclamped jitter was
     // pushing the outer two plants half out of frame.
-    const inset = 90;
+    // 90 was not enough once founders spanned the full droop range: a weeper leans ~45px
+    // past its plot, so the outermost one hung its only flower over the frame edge.
+    const inset = 135;
     const span = W - inset * 2;
     const x =
       inset +
       ((i + 0.5) / PLOTS) * span +
       (rand() - 0.5) * (span / PLOTS) * 0.4;
-    const p = growPlant(pheno, Math.floor(rand() * 2 ** 30), { x, y: soil });
+    // The growth seed is the GENOME's, never the plot's (§6). A plot-derived seed would grow
+    // the same genome differently in each bed, which breaks both share links and lineage
+    // recognizability — so the plot only decides WHERE, never WHAT.
+    const p = growPlant(express(genome), genomeSeed(genome), { x, y: soil });
     const maxTick = Math.max(
       0,
       ...p.segments.map((s) => s.tick),
       ...p.blooms.map((b) => b.tick),
     );
     // Staggered emergence, so the bed fills in rather than all rising in lockstep.
-    beds.push({ plant: p, startTick: Math.floor(rand() * 46), maxTick });
+    beds.push({
+      genome,
+      plant: p,
+      startTick: Math.floor(rand() * 46),
+      maxTick,
+    });
   }
   t = 0;
   doneAtT = null;
   generation++;
+  // Every plant in the bed is now reproducible from eleven characters. Printing them is the
+  // cheapest possible check that the share format is wired to what is actually on screen.
+  codesEl.textContent = beds.map((b) => serialize(b.genome)).join("  ");
 }
 
 function frame(): void {
@@ -100,9 +93,7 @@ function frame(): void {
   paintSoil(ctx, W, H);
 
   const done = beds.every((b) => t - b.startTick >= b.maxTick);
-  statusEl.textContent = done
-    ? `generation ${generation} — grown`
-    : `generation ${generation} — growing`;
+  statusEl.textContent = `generation ${generation} — ${done ? "grown" : "growing"}`;
 
   // Growth speed: ~1.4 ticks per frame reads as unhurried without being tedious.
   t += 1.4;

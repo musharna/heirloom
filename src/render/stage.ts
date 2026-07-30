@@ -1,5 +1,6 @@
 import type { Plant, StrokeSegment } from "../types";
 import { buildOutline, fillOutline, groupChains, smoothChain } from "./strokes";
+import { leafMidrib, leafPath } from "./leaves";
 import { fillPetal, petalColor, petalGlow, petalPath } from "./petals";
 
 export const PALETTE = {
@@ -7,9 +8,14 @@ export const PALETTE = {
   vignette: "rgba(0,0,0,0.55)",
   stem: "#4a6b52",
   stemHi: "#6d9175",
-  stemInk: "rgba(10,20,14,0.65)",
+  stemInk: "rgba(8,17,12,0.85)",
   soil: "#171b1c",
   stamen: "#e8c35a",
+  leaf: "#3f6349",
+  leafInk: "rgba(8,17,12,0.5)",
+  sepal: "#4e7355",
+  // Near-opaque and very dark: the contour has to beat a mid-lightness fill in value.
+  petalInk: "rgba(26,10,20,0.9)",
 } as const;
 
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
@@ -34,6 +40,15 @@ export function plantBounds(plant: Plant): Bounds {
   for (const b of plant.blooms) {
     add(b.center.x - b.radius, b.center.y - b.radius);
     add(b.center.x + b.radius, b.center.y + b.radius);
+  }
+  // Leaves count too, or a leafy plant would be fitted as though it were a bare stem and
+  // its foliage would hang outside the frame.
+  for (const lf of plant.leaves) {
+    add(lf.attach.x, lf.attach.y);
+    add(
+      lf.attach.x + Math.cos(lf.angle) * lf.length,
+      lf.attach.y + Math.sin(lf.angle) * lf.length,
+    );
   }
   if (minX === Infinity) return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
   return { minX, minY, maxX, maxY };
@@ -100,15 +115,26 @@ export function paintStage(
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
-  // A soil band, so a plant reads as rooted rather than as a cut stem hung in black.
-  const soilTop = h - Math.max(10, h * 0.045);
+  paintSoil(ctx, w, h);
+}
+
+/**
+ * The soil band. Called by paintStage, and called AGAIN after the plant so the stem's flat
+ * base is buried in the ground rather than stopping 2px above it in open air.
+ */
+export function paintSoil(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+): void {
+  const soilTop = soilLine(h);
   ctx.fillStyle = PALETTE.soil;
   ctx.fillRect(0, soilTop, w, h - soilTop);
-  const edge = ctx.createLinearGradient(0, soilTop - 6, 0, soilTop + 2);
+  const edge = ctx.createLinearGradient(0, soilTop - 7, 0, soilTop + 2);
   edge.addColorStop(0, "rgba(0,0,0,0)");
-  edge.addColorStop(1, "rgba(0,0,0,0.45)");
+  edge.addColorStop(1, "rgba(0,0,0,0.5)");
   ctx.fillStyle = edge;
-  ctx.fillRect(0, soilTop - 6, w, 8);
+  ctx.fillRect(0, soilTop - 7, w, 9);
 }
 
 /** Where paintStage puts the soil surface. Plants should be seated on this line. */
@@ -139,9 +165,32 @@ export function paintPlant(
         ctx.lineTo(outline[i]!.x, outline[i]!.y);
       ctx.closePath();
       ctx.strokeStyle = PALETTE.stemInk;
-      ctx.lineWidth = 0.9;
+      ctx.lineWidth = 1.1;
       ctx.stroke();
     }
+  }
+
+  // Leaves sit above the stems they attach to but below the blooms.
+  for (const lf of plant.leaves) {
+    const pts = leafPath(lf);
+    if (pts.length < 3) continue;
+    ctx.beginPath();
+    ctx.moveTo(pts[0]!.x, pts[0]!.y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]!.x, pts[i]!.y);
+    ctx.closePath();
+    ctx.fillStyle = PALETTE.leaf;
+    ctx.fill();
+    ctx.strokeStyle = PALETTE.stemInk;
+    ctx.lineWidth = 0.9;
+    ctx.stroke();
+
+    const [a, b] = leafMidrib(lf);
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.strokeStyle = PALETTE.leafInk;
+    ctx.lineWidth = 0.7;
+    ctx.stroke();
   }
 
   // Blooms in TWO passes: every halo first, then every petal.
@@ -169,17 +218,33 @@ export function paintPlant(
   }
 
   for (const b of plant.blooms) {
+    ctx.save();
+    // Nodding foreshortening: a bloom on a downward-pointing shoot is seen obliquely, so
+    // squash it across the shoot axis. Without this every bloom faced the viewer dead-on
+    // and a weeping plant's flowers read as merely positioned low, not as pendant.
+    const squash = 1 - 0.45 * b.tilt;
+    ctx.translate(b.center.x, b.center.y);
+    ctx.scale(1, squash);
+    ctx.translate(-b.center.x, -b.center.y);
+
+    // Calyx first — behind the corolla, showing through the gaps between petals.
+    for (const s of b.sepals) {
+      fillPetal(ctx, petalPath(s), PALETTE.sepal, PALETTE.stemInk);
+    }
+
     // A receptacle disc behind the petals, so the middle of a bloom is never a hole in
     // the ground. Doubled blooms previously darkened to a near-black spiral void.
-    ctx.fillStyle = petalColor(b.hueClass, b.white, 0.35);
+    ctx.fillStyle = petalColor(b.hueClass, b.white, 0.55);
     ctx.beginPath();
-    ctx.arc(b.center.x, b.center.y, b.radius * 0.34, 0, Math.PI * 2);
+    ctx.arc(b.center.x, b.center.y, b.radius * 0.36, 0, Math.PI * 2);
     ctx.fill();
 
     for (const p of b.petals) {
       const fill = petalColor(b.hueClass, b.white, p.colorDepth);
-      // Stronger ink outline: petal edges ARE the line-art of the art direction.
-      fillPetal(ctx, petalPath(p), fill, "rgba(20,10,18,0.55)");
+      // The contour must beat the FILL in value or it vanishes. At 0.55 alpha over a
+      // mid-lightness pink it was invisible — the geometry was there, the contrast was not,
+      // which is why the white panel was the only one that read as a layered flower.
+      fillPetal(ctx, petalPath(p), fill, PALETTE.petalInk);
     }
 
     // Singles show a stamen boss. Doubles convert stamens to petals (ABC C-function), so
@@ -190,23 +255,30 @@ export function paintPlant(
       ctx.arc(
         b.center.x,
         b.center.y,
-        Math.max(1.4, b.radius * 0.15),
+        Math.max(1.6, b.radius * 0.17),
         0,
         Math.PI * 2,
       );
       ctx.fill();
+      ctx.strokeStyle = PALETTE.petalInk;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
     } else {
-      ctx.fillStyle = petalColor(b.hueClass, b.white, 0);
+      ctx.fillStyle = petalColor(b.hueClass, b.white, 1);
       ctx.beginPath();
       ctx.arc(
         b.center.x,
         b.center.y,
-        Math.max(1.2, b.radius * 0.12),
+        Math.max(1.8, b.radius * 0.19),
         0,
         Math.PI * 2,
       );
       ctx.fill();
+      ctx.strokeStyle = PALETTE.petalInk;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
     }
+    ctx.restore();
   }
   ctx.restore();
 }

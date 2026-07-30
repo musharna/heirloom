@@ -7,10 +7,12 @@ import type {
   Tip,
   Vec2,
   Bloom,
+  LeafSpec,
 } from "../types";
 
 const MIN_WIDTH = 0.6;
 const MAX_TIPS = 400;
+const LEAF_EVERY = 7;
 const UP = -Math.PI / 2;
 const DOWN = Math.PI / 2;
 
@@ -18,6 +20,7 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
   const rand = mulberry32(seed);
   const segments: StrokeSegment[] = [];
   const blooms: Bloom[] = [];
+  const leaves: LeafSpec[] = [];
 
   const maxTicks = Math.round(40 + 60 * pheno.vigour);
   // Sized so a max-vigour plant traces roughly 350 units — the scale of one garden plot.
@@ -25,6 +28,7 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
   // 340px canvas, taking its bloom with it.
   const stepLen = 1.6 + 2.4 * pheno.vigour;
   let nextId = 0;
+  let leafParity = 0;
 
   let tips: Tip[] = [
     {
@@ -36,6 +40,7 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       depth: 0,
       vigourLeft: maxTicks,
       alive: true,
+      cleared: false,
     },
   ];
 
@@ -87,6 +92,24 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       tip.age++;
       tip.vigourLeft--;
 
+      // 3b. Leaves, alternating sides at every Nth node (137.5deg phyllotaxy read in 2D
+      //     as simple alternation). Foliage is what a branching habit expresses itself
+      //     THROUGH: with bare stems, a max-branching plant collapses into an
+      //     undifferentiated mass of flowers instead of reading as a bushy plant.
+      if (tip.age % LEAF_EVERY === 0 && tip.width > MIN_WIDTH * 2.2) {
+        const side = (leafParity++ & 1) === 0 ? 1 : -1;
+        // Scaled against bloomRadius, not against stem width. At a quarter of bloom size
+        // the foliage rendered as dark flecks on the stem and contributed nothing to the
+        // silhouette — on a real plant a leaf is comparable to a flower.
+        const scale = pheno.bloomRadius * (0.62 + 0.5 * pheno.vigour);
+        leaves.push({
+          attach: { x: tip.pos.x, y: tip.pos.y },
+          angle: tip.dir + side * (0.85 + 0.25 * rand()),
+          length: scale * (1 - 0.1 * tip.depth) * (0.85 + 0.3 * rand()),
+          width: scale * 0.52 * (1 - 0.1 * tip.depth),
+        });
+      }
+
       // 4. Branch
       //    Probability spans a WIDE range across the gene. At the old 0.08 ceiling the
       //    difference between a mid and a max branchiness was 0.044 vs 0.08 per tick —
@@ -107,6 +130,8 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
           depth: tip.depth + 1,
           vigourLeft: Math.max(1, Math.round(tip.vigourLeft * 0.7)),
           alive: true,
+          // A branch is born already clear of the ground if its parent was.
+          cleared: tip.cleared,
         });
       }
 
@@ -115,7 +140,14 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       //    cannot grow underground. Without this a max-droop plant kept curving past
       //    horizontal and hung well below its own base, which framed as a clipped plant
       //    dangling off the bottom of its plot.
-      const reachedGround = tip.age > 3 && tip.pos.y >= origin.y;
+      //    Stop a bloom's RADIUS clear of the ground, not just its centre — otherwise a
+      //    pendant bloom sank into the soil band and was sliced by the panel edge.
+      //    The rule only applies AFTER the tip has cleared the ground zone. Gating on age
+      //    alone killed every plant on its fourth tick, because a shoot starts at ground
+      //    level and had not yet risen a bloom-radius above it.
+      const groundY = origin.y - pheno.bloomRadius * 0.9;
+      if (tip.pos.y < groundY) tip.cleared = true;
+      const reachedGround = tip.cleared && tip.pos.y >= groundY;
       if (tip.width < MIN_WIDTH || tip.vigourLeft <= 0 || reachedGround) {
         tip.alive = false;
         blooms.push(layoutBloom(pheno, tip.pos, tip.dir, rand));
@@ -129,5 +161,5 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
   for (const tip of tips)
     blooms.push(layoutBloom(pheno, tip.pos, tip.dir, rand));
 
-  return { segments, blooms };
+  return { segments, blooms, leaves };
 }

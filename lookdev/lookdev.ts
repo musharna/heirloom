@@ -2,6 +2,7 @@ import { growPlant } from "../src/growth/sim";
 import {
   fitPlant,
   paintPlant,
+  paintSoil,
   paintStage,
   soilLine,
 } from "../src/render/stage";
@@ -74,6 +75,9 @@ CASES.forEach((c, i) => {
   ctx.scale(f.scale, f.scale);
   paintPlant(ctx, plant);
   ctx.restore();
+  // Redraw the soil OVER the plant so the stem's flat base is buried in the ground
+  // instead of stopping in open air just above it.
+  paintSoil(ctx, W, H);
 });
 
 // Signals to the screenshot tool that every canvas has finished painting.

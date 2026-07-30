@@ -1,7 +1,13 @@
-import type { Plant, StrokeSegment } from "../types";
+import type { Bloom, Plant, StrokeSegment } from "../types";
 import { buildOutline, fillOutline, groupChains, smoothChain } from "./strokes";
 import { leafMidrib, leafPath } from "./leaves";
-import { fillPetal, petalColor, petalGlow, petalPath } from "./petals";
+import {
+  fillPetal,
+  petalColor,
+  petalGlow,
+  petalPath,
+  petalRim,
+} from "./petals";
 
 /**
  * Silhouette lines are LIGHT, not dark.
@@ -21,12 +27,12 @@ export const PALETTE = {
   stem: "#3d5c46",
   stemHi: "#557a5f",
   stemRim: "rgba(196,224,201,0.55)",
-  soil: "#171b1c",
+  soil: "#1c2021",
+  soilRim: "rgba(150,170,152,0.34)",
   stamen: "#e8c35a",
   leaf: "#35543d",
   leafRim: "rgba(178,212,183,0.5)",
   leafVein: "rgba(190,220,196,0.32)",
-  petalRim: "rgba(255,228,220,0.62)",
   // Dark line kept ONLY for divisions between overlapping petals, where the surface
   // behind the line is a lit petal rather than the dark ground.
   petalDivide: "rgba(48,14,26,0.55)",
@@ -101,6 +107,32 @@ export function fitPlant(plant: Plant, w: number, h: number, pad = 14): Fit {
   return { scale, dx, dy };
 }
 
+/**
+ * Drop blooms that sit so far inside another bloom that they cannot read as a flower.
+ *
+ * Every terminated shoot tip produced a bloom, and dense branching put many tips within a
+ * few pixels of each other. The overlapping petals merged into an undifferentiated mass
+ * while their centre dots stayed visible, fusing into chains — one canopy collapsed ~85
+ * centres into 29 blobs, the largest reading as a 20-bead necklace. Culling fixes that at
+ * the source and opens the canopy so the branch geometry behind it can be seen.
+ *
+ * Exported and pure so the rule is testable without a canvas.
+ */
+export function cullOccludedBlooms(
+  blooms: Bloom[],
+  minSeparation = 0.62,
+): Bloom[] {
+  const kept: Bloom[] = [];
+  for (const b of blooms) {
+    const tooClose = kept.some((k) => {
+      const d = Math.hypot(k.center.x - b.center.x, k.center.y - b.center.y);
+      return d < Math.max(k.radius, b.radius) * minSeparation;
+    });
+    if (!tooClose) kept.push(b);
+  }
+  return kept;
+}
+
 /** Segments whose tick has already elapsed. Drives the growth animation. */
 export function visibleSegments(
   plant: Plant,
@@ -141,14 +173,34 @@ export function paintSoil(
   w: number,
   h: number,
 ): void {
+  // An UNEVEN soil surface, and a taller one. A flat full-width rectangle with a straight
+  // top edge was read as a caption strip rather than as ground — correctly, since that is
+  // exactly what it looked like. An irregular crest plus a lit rim along it makes it a
+  // surface the plant sits on.
   const soilTop = soilLine(h);
+  const crest = (x: number): number =>
+    soilTop +
+    2.6 * Math.sin(x * 0.055) +
+    1.5 * Math.sin(x * 0.13 + 1.7) +
+    0.9 * Math.sin(x * 0.31 + 0.4);
+
+  ctx.beginPath();
+  ctx.moveTo(0, h);
+  ctx.lineTo(0, crest(0));
+  for (let x = 1; x <= w; x++) ctx.lineTo(x, crest(x));
+  ctx.lineTo(w, h);
+  ctx.closePath();
   ctx.fillStyle = PALETTE.soil;
-  ctx.fillRect(0, soilTop, w, h - soilTop);
-  const edge = ctx.createLinearGradient(0, soilTop - 7, 0, soilTop + 2);
-  edge.addColorStop(0, "rgba(0,0,0,0)");
-  edge.addColorStop(1, "rgba(0,0,0,0.5)");
-  ctx.fillStyle = edge;
-  ctx.fillRect(0, soilTop - 7, w, 9);
+  ctx.fill();
+
+  // Lit crest line: the ground gets the same light-rim treatment as the plant, so it reads
+  // as a surface edge rather than as a colour change.
+  ctx.beginPath();
+  ctx.moveTo(0, crest(0));
+  for (let x = 1; x <= w; x++) ctx.lineTo(x, crest(x));
+  ctx.strokeStyle = PALETTE.soilRim;
+  ctx.lineWidth = 1.1;
+  ctx.stroke();
 }
 
 /** Where paintStage puts the soil surface. Plants should be seated on this line. */
@@ -214,20 +266,32 @@ export function paintPlant(
   // overlapping blooms into washed-out mush where you could not tell which was in front.
   ctx.save();
   ctx.shadowBlur = 0;
-  for (const b of plant.blooms) {
+
+  // Occluded blooms are DROPPED, not drawn. A bloom whose centre sits inside a kept
+  // bloom's disc contributes no readable flower — but it did contribute a centre dot, and
+  // those fused into chains: one panel collapsed ~85 centres into 29 blobs, the largest a
+  // 20-deep "string of beads" draped across the canopy. Culling also opens the canopy so
+  // branch geometry behind it becomes visible.
+  const blooms = cullOccludedBlooms(plant.blooms);
+
+  // Glow radius and alpha cut hard. At 1.7x radius the halo measured an 18-27px ramp whose
+  // pixel area equalled up to 100% of the drawn plant, roughly 20:1 against the 1px rim —
+  // so the eye read bloom-haze instead of linework, and every contour fix drowned in it.
+  for (const b of blooms) {
+    const r = b.radius * 1.15;
     const halo = ctx.createRadialGradient(
       b.center.x,
       b.center.y,
-      b.radius * 0.2,
+      b.radius * 0.45,
       b.center.x,
       b.center.y,
-      b.radius * 1.7,
+      r,
     );
-    halo.addColorStop(0, petalGlow(b.hueClass, b.white, b.white ? 0.2 : 0.17));
+    halo.addColorStop(0, petalGlow(b.hueClass, b.white, b.white ? 0.1 : 0.09));
     halo.addColorStop(1, petalGlow(b.hueClass, b.white, 0));
     ctx.fillStyle = halo;
     ctx.beginPath();
-    ctx.arc(b.center.x, b.center.y, b.radius * 1.7, 0, Math.PI * 2);
+    ctx.arc(b.center.x, b.center.y, r, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -255,7 +319,7 @@ export function paintPlant(
   // hidden in reality, so drawing them inserted hard green wedges exactly where
   // petal-on-petal overlap should be, which ENTRENCHED the pinwheel read it was meant to
   // cure. Bloom.sepals is still generated for a future profile/bud view.
-  for (const b of plant.blooms) {
+  for (const b of blooms) {
     withBloomTransform(b, () => {
       // A receptacle disc behind the petals, so the middle of a bloom is never a hole in
       // the ground. Doubled blooms previously darkened to a near-black spiral void.
@@ -266,9 +330,9 @@ export function paintPlant(
 
       for (const p of b.petals) {
         const fill = petalColor(b.hueClass, b.white, p.colorDepth);
-        // LIGHT rim, not dark ink — see the PALETTE comment. A dark contour on a dark
-        // ground rendered correctly and was still invisible.
-        fillPetal(ctx, petalPath(p), fill, PALETTE.petalRim);
+        // Rim chosen relative to THIS fill's lightness, so a pale morph gets a dark
+        // outline. A fixed light rim cannot draw a white flower.
+        fillPetal(ctx, petalPath(p), fill, petalRim(b.white, p.colorDepth));
       }
     });
   }
@@ -278,7 +342,7 @@ export function paintPlant(
   // Drawing each bloom's centre immediately after its own petals meant the NEXT bloom's
   // petals buried it: measured 4 visible centres against ~13 bloom-sized units, so two
   // thirds of the flowers read as centreless petal piles.
-  for (const b of plant.blooms) {
+  for (const b of blooms) {
     withBloomTransform(b, () => {
       if (b.stamens) {
         ctx.fillStyle = PALETTE.stamen;

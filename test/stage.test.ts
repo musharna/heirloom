@@ -4,9 +4,11 @@ import {
   PALETTE,
   plantBounds,
   fitPlant,
+  cullOccludedBlooms,
 } from "../src/render/stage";
+import { petalLightness, petalRim } from "../src/render/petals";
 import { growPlant } from "../src/growth/sim";
-import type { Phenotype } from "../src/types";
+import type { Bloom, Phenotype } from "../src/types";
 
 const P: Phenotype = {
   vigour: 0.5,
@@ -58,16 +60,73 @@ describe("silhouette rim colours", () => {
     );
   };
 
-  it("keeps every silhouette rim lighter than the ground", () => {
+  it("keeps stem and leaf rims lighter than the ground they sit on", () => {
+    // Those two always have the dark ground behind them, so light is always right.
     const ground = lum(PALETTE.ground);
-    for (const rim of [PALETTE.stemRim, PALETTE.leafRim, PALETTE.petalRim]) {
+    for (const rim of [PALETTE.stemRim, PALETTE.leafRim]) {
       expect(lum(rim)).toBeGreaterThan(ground + 60);
     }
+  });
+
+  it("picks the petal rim by CONTRAST with its fill, not by a fixed lightness", () => {
+    // The rule that replaced "always light". A fixed pale rim could not draw a pale
+    // flower: on the white morph the fill is ~(229,227,220), so a light rim had no
+    // contrast to give and the petals fused into a smear. Every fill must get a rim that
+    // differs from it substantially, whichever direction that requires.
+    for (const white of [false, true]) {
+      for (const depth of [0, 0.5, 1]) {
+        const fillL = (petalLightness(white, depth) / 100) * 255;
+        expect(Math.abs(lum(petalRim(white, depth)) - fillL)).toBeGreaterThan(
+          55,
+        );
+      }
+    }
+  });
+
+  it("gives a pale fill a DARK rim and a mid fill a LIGHT one", () => {
+    const paleRim = lum(petalRim(true, 1)); // white morph, inner whorl
+    const midRim = lum(petalRim(false, 0)); // coloured morph, outer whorl
+    expect(paleRim).toBeLessThan(midRim);
   });
 
   it("still allows a DARK line for petal-on-petal divisions", () => {
     // Those sit on a lit petal, not on the ground, so dark is correct there.
     expect(lum(PALETTE.petalDivide)).toBeLessThan(lum(PALETTE.ground) + 60);
+  });
+});
+
+describe("cullOccludedBlooms", () => {
+  const bloom = (x: number, y: number, radius = 20): Bloom => ({
+    center: { x, y },
+    radius,
+    petals: [],
+    sepals: [],
+    hueClass: 0,
+    white: false,
+    stamens: true,
+    tilt: 0,
+  });
+
+  it("drops a bloom buried inside another and keeps the first", () => {
+    const kept = cullOccludedBlooms([bloom(0, 0), bloom(4, 0)]);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]!.center.x).toBe(0);
+  });
+
+  it("keeps blooms that are merely adjacent", () => {
+    expect(cullOccludedBlooms([bloom(0, 0), bloom(40, 0)])).toHaveLength(2);
+  });
+
+  it("collapses a dense chain to a few readable flowers", () => {
+    // The bead-necklace defect: ~85 centres fused into 29 blobs across one canopy.
+    const chain = Array.from({ length: 20 }, (_, i) => bloom(i * 3, 0));
+    const kept = cullOccludedBlooms(chain);
+    expect(kept.length).toBeLessThan(8);
+    expect(kept.length).toBeGreaterThan(0);
+  });
+
+  it("is a no-op on an empty list", () => {
+    expect(cullOccludedBlooms([])).toEqual([]);
   });
 });
 

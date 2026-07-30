@@ -32,12 +32,17 @@ function rawProfile(shape: PetalShape, t: number): number {
     // Amplitudes are LARGE on purpose. At 0.26/0.20 these two alleles changed total petal
     // area by 0.5% and 2.3% against baseline and were invisible at the size the game
     // actually renders — measured, not guessed. A gene the player cannot see is not a gene.
+    // Amplitude is a balance: too small and the allele is invisible at render scale (0.26
+    // changed petal area by 0.5%), too large and the margin turns into angular V-notch
+    // cusps instead of rounded scallops (0.62 did exactly that). These sit between, with
+    // LOW frequencies so each undulation is broad enough to read as a shape rather than
+    // as sawtooth aliasing.
     case "lobed":
-      // Deep scallops: three big rounded lobes down each margin.
-      return b * (1 + 0.62 * Math.cos(6 * Math.PI * t) * Math.sin(Math.PI * t));
+      // Two deep rounded scallops per margin.
+      return b * (1 + 0.44 * Math.cos(4 * Math.PI * t) * Math.sin(Math.PI * t));
     case "frilled":
-      // Many shallower, tighter ruffles — a different rhythm from lobed, not a milder one.
-      return b * (1 + 0.4 * Math.sin(15 * Math.PI * t) * Math.sin(Math.PI * t));
+      // A faster, shallower ripple — a different rhythm from lobed, not a milder one.
+      return b * (1 + 0.28 * Math.sin(9 * Math.PI * t) * Math.sin(Math.PI * t));
   }
 }
 
@@ -114,6 +119,25 @@ export function petalColor(
   if (white) return `hsl(45 14% ${88 + 7 * colorDepth}%)`;
   const h = HUES[hueClass] ?? HUES[0]!;
   return `hsl(${h} ${72 - 6 * colorDepth}% ${56 + 13 * colorDepth}%)`;
+}
+
+/** HSL lightness percentage of the fill a petal will be painted with. */
+export function petalLightness(white: boolean, colorDepth: number): number {
+  return white ? 88 + 7 * colorDepth : 56 + 13 * colorDepth;
+}
+
+/**
+ * Rim colour chosen RELATIVE to the fill it outlines, rather than a fixed light value.
+ *
+ * A fixed pale rim cannot draw a pale flower: on the white morph the fill is ~(229,227,220)
+ * and a light rim had no contrast to give, so the petals fused into a smear. Contrast, not
+ * lightness, is what makes an outline an outline — so a light fill gets a dark rim and a
+ * mid/dark fill gets a light one.
+ */
+export function petalRim(white: boolean, colorDepth: number): string {
+  return petalLightness(white, colorDepth) > 76
+    ? "rgba(64,52,44,0.7)"
+    : "rgba(255,236,228,0.85)";
 }
 
 /**

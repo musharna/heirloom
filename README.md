@@ -1,5 +1,7 @@
 # Heirloom
 
+**Play it: https://musharna.github.io/heirloom/**
+
 A flower-breeding toy: click a bloom to take a seed, drag one bloom onto another to cross them,
 plant the seed and watch what comes up. Nothing to win, nothing to lose, no menus. Retired plants
 fade into a background that slowly becomes a record of everything you have ever bred.
@@ -14,6 +16,9 @@ the genetics.
 npm ci
 npm run dev     # http://localhost:5173/
 ```
+
+Deployed to GitHub Pages from `.github/workflows/pages.yml`, gated on typecheck and tests — a
+green deploy of a broken bundle looks fine in the Actions log and is broken in a browser.
 
 `/garden/` is the game. `/lookdev/` is a diagnostic sheet that varies one gene per panel against
 a shared seed — useful for judging a single trait, useless for judging the game, since it draws
@@ -40,6 +45,17 @@ whatever hue it carries — dosage steps, and continuous drift through the polyg
 
 Traits are never disclosed before bloom. Growing the plant _is_ the reveal.
 
+## Sharing
+
+Every genome packs into 11 base64url characters — eight loci in 48 bits, plus a version byte and
+a checksum. The code rides in the URL fragment, so it never reaches a server:
+
+    https://musharna.github.io/heirloom/garden/#g=AWOPAIpYIKA
+
+Growth is seeded from a hash of the genome alone, so that link grows the same plant for everyone.
+The checksum matters because the packing is dense — every bit pattern is a legal genome, so
+without it a mistyped link would silently hand back the wrong flower instead of an error.
+
 ## Architecture
 
 One-way pipeline; the renderer never sees a genome.
@@ -61,7 +77,7 @@ canonical plant and a shared link reproduces it exactly.
 ## Tests
 
 ```sh
-npm test              # 175 unit tests
+npm test              # 183 unit tests
 npx tsc --noEmit
 ```
 
@@ -81,6 +97,13 @@ npm run drive     # all three, in order
 Each driver carries negative controls, because a check that only ever passes proves nothing —
 clicking bare sky must yield no seed, clearing storage must produce a _different_ garden, and an
 empty background buffer must read as empty before any "it grew" assertion is trusted.
+
+They take a `GARDEN_URL`, so the same checks run against the deployed site rather than only
+against a dev server — a green CI run says the build succeeded, not that the site works:
+
+```sh
+GARDEN_URL=https://musharna.github.io/heirloom/garden/ npm run drive
+```
 
 Design and per-milestone outcomes, including what went wrong and why:
 `docs/superpowers/specs/2026-07-29-heirloom-modern-seed-design.md`.

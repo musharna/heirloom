@@ -1,0 +1,52 @@
+name: pages
+
+on:
+  push:
+    branches: [m1-growth-spike]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; cancel-in-progress is off so a queued deploy still lands
+# rather than being dropped when another push arrives.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      # The drivers need a browser; the BUILD does not, and downloading Chromium on every
+      # push would cost more minutes than the whole build.
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Typecheck and unit tests gate the deploy. A green Pages deploy of a broken bundle is
+      # worse than a red build: the site looks fine in the Actions log and is broken in a
+      # browser.
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

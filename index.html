@@ -53,12 +53,13 @@
   <body>
     <main>
       <h1>Heirloom</h1>
+      <!-- Relative, not absolute. The deployed site lives under /heirloom/, where an
+           absolute /garden/ resolves to the domain root and 404s. -->
       <nav>
-        <a href="/garden/"
-          >garden
-          <span>seven genomes growing in real time — the game's look</span></a
+        <a href="./garden/"
+          >garden <span>click a flower, cross two, plant the seed</span></a
         >
-        <a href="/lookdev/"
+        <a href="./lookdev/"
           >lookdev
           <span>one seed, one gene varied per panel — a test fixture</span></a
         >

@@ -72,6 +72,12 @@ export type Bloom = {
   stamens: boolean; // false when doubled
   /** 0 = face-on, 1 = the shoot points straight down. Drives nodding foreshortening. */
   tilt: number;
+  /**
+   * Tick at which the shoot terminated and this flower appeared. Without it the renderer
+   * cannot animate growth: segments would draw in over time while every flower popped in at
+   * once on frame zero.
+   */
+  tick: number;
 };
 
 /** A leaf blade attached to a point on a stem. */
@@ -80,6 +86,8 @@ export type LeafSpec = {
   angle: number; // radians — direction the blade points
   length: number;
   width: number;
+  /** Tick at which this leaf was emitted, so foliage also fills in as the plant grows. */
+  tick: number;
 };
 
 export type Plant = {

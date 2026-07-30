@@ -154,11 +154,34 @@ export function petalGlow(
   return `hsl(${h} 85% 66% / ${alpha})`;
 }
 
+/**
+ * Along-petal gradient: deeper toward the throat, lighter toward the margin.
+ *
+ * Flat single-value fills were what made blooms read as vector clip-art rather than as
+ * petals — a scanline straight across a petal returned one byte-identical colour the whole
+ * way. Shading runs along the petal AXIS (base to tip), which is the direction light and
+ * pigment actually vary in.
+ */
+export function petalFill(
+  ctx: CanvasRenderingContext2D,
+  spec: PetalSpec,
+  hueClass: number,
+  white: boolean,
+): CanvasGradient {
+  const tipX = spec.center.x + Math.cos(spec.angle) * spec.length;
+  const tipY = spec.center.y + Math.sin(spec.angle) * spec.length;
+  const g = ctx.createLinearGradient(spec.center.x, spec.center.y, tipX, tipY);
+  const d = spec.colorDepth;
+  g.addColorStop(0, petalColor(hueClass, white, Math.max(0, d - 0.4)));
+  g.addColorStop(1, petalColor(hueClass, white, Math.min(1, d + 0.4)));
+  return g;
+}
+
 /** Thin canvas wrapper. No logic worth testing. */
 export function fillPetal(
   ctx: CanvasRenderingContext2D,
   pts: Vec2[],
-  fill: string,
+  fill: string | CanvasGradient,
   stroke: string,
 ): void {
   if (pts.length < 3) return;

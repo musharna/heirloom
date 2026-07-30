@@ -105,6 +105,7 @@ describe("cullOccludedBlooms", () => {
     white: false,
     stamens: true,
     tilt: 0,
+    tick: 0,
   });
 
   it("drops a bloom buried inside another and keeps the first", () => {

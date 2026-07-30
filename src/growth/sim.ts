@@ -16,6 +16,19 @@ const LEAF_EVERY = 7;
 const UP = -Math.PI / 2;
 const DOWN = Math.PI / 2;
 
+/**
+ * How far a flower at this tip has opened, 0..1.
+ *
+ * Distal shoots carry younger flowers, so a real inflorescence shows open faces low and
+ * inward, and tight buds at the growing tips. Every bloom opening to 1.0 made a flower head
+ * read as a sheet of identical stickers.
+ */
+function openness(tip: Tip, rand: () => number): number {
+  const byDepth = 1 - 0.2 * tip.depth;
+  const jitter = 0.62 + 0.38 * rand();
+  return Math.min(1, Math.max(0.3, byDepth * jitter));
+}
+
 export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
   const rand = mulberry32(seed);
   const segments: StrokeSegment[] = [];
@@ -116,6 +129,7 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
           angle: tip.dir + side * (0.85 + 0.25 * rand()),
           length: scale * (1 - 0.1 * tip.depth) * (0.85 + 0.3 * rand()),
           width: scale * 0.52 * (1 - 0.1 * tip.depth),
+          tick,
         });
       }
 
@@ -159,7 +173,9 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       const reachedGround = tip.cleared && tip.pos.y >= groundY;
       if (tip.width < MIN_WIDTH || tip.vigourLeft <= 0 || reachedGround) {
         tip.alive = false;
-        blooms.push(layoutBloom(pheno, tip.pos, tip.dir, rand));
+        blooms.push(
+          layoutBloom(pheno, tip.pos, tip.dir, rand, openness(tip, rand), tick),
+        );
       }
     }
 
@@ -168,7 +184,9 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
 
   // Any tip still alive when the clock runs out still blooms.
   for (const tip of tips)
-    blooms.push(layoutBloom(pheno, tip.pos, tip.dir, rand));
+    blooms.push(
+      layoutBloom(pheno, tip.pos, tip.dir, rand, openness(tip, rand), maxTicks),
+    );
 
   return { segments, blooms, leaves };
 }

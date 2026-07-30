@@ -8,6 +8,7 @@ const spec: LeafSpec = {
   angle: 0,
   length: 20,
   width: 10,
+  tick: 0,
 };
 
 const P: Phenotype = {

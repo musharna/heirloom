@@ -3,19 +3,33 @@ import { buildOutline, fillOutline, groupChains, smoothChain } from "./strokes";
 import { leafMidrib, leafPath } from "./leaves";
 import { fillPetal, petalColor, petalGlow, petalPath } from "./petals";
 
+/**
+ * Silhouette lines are LIGHT, not dark.
+ *
+ * "Ink line-art on a dark ground" is self-contradictory if the ink is dark: a near-black
+ * contour on a near-black ground is invisible by construction. Measured proof from the
+ * round-3 critique — a stem scanline read ground [12,15,17] -> fill [109,145,117] ->
+ * [24,36,28] -> ground: the contour WAS rendering, at 1px, and could not be seen. Making
+ * it darker and more opaque (the round-3 attempt) moved it in exactly the wrong direction.
+ *
+ * Line art on a dark surface works the way chalk does: the line is lighter than the
+ * surface. These rim colours are what separate a silhouette from the ground.
+ */
 export const PALETTE = {
   ground: "#0d1013",
   vignette: "rgba(0,0,0,0.55)",
-  stem: "#4a6b52",
-  stemHi: "#6d9175",
-  stemInk: "rgba(8,17,12,0.85)",
+  stem: "#3d5c46",
+  stemHi: "#557a5f",
+  stemRim: "rgba(196,224,201,0.55)",
   soil: "#171b1c",
   stamen: "#e8c35a",
-  leaf: "#3f6349",
-  leafInk: "rgba(8,17,12,0.5)",
-  sepal: "#4e7355",
-  // Near-opaque and very dark: the contour has to beat a mid-lightness fill in value.
-  petalInk: "rgba(26,10,20,0.9)",
+  leaf: "#35543d",
+  leafRim: "rgba(178,212,183,0.5)",
+  leafVein: "rgba(190,220,196,0.32)",
+  petalRim: "rgba(255,228,220,0.62)",
+  // Dark line kept ONLY for divisions between overlapping petals, where the surface
+  // behind the line is a lit petal rather than the dark ground.
+  petalDivide: "rgba(48,14,26,0.55)",
 } as const;
 
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
@@ -164,8 +178,8 @@ export function paintPlant(
       for (let i = 1; i < outline.length; i++)
         ctx.lineTo(outline[i]!.x, outline[i]!.y);
       ctx.closePath();
-      ctx.strokeStyle = PALETTE.stemInk;
-      ctx.lineWidth = 1.1;
+      ctx.strokeStyle = PALETTE.stemRim;
+      ctx.lineWidth = 1.2;
       ctx.stroke();
     }
   }
@@ -180,15 +194,15 @@ export function paintPlant(
     ctx.closePath();
     ctx.fillStyle = PALETTE.leaf;
     ctx.fill();
-    ctx.strokeStyle = PALETTE.stemInk;
-    ctx.lineWidth = 0.9;
+    ctx.strokeStyle = PALETTE.leafRim;
+    ctx.lineWidth = 1;
     ctx.stroke();
 
     const [a, b] = leafMidrib(lf);
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
-    ctx.strokeStyle = PALETTE.leafInk;
+    ctx.strokeStyle = PALETTE.leafVein;
     ctx.lineWidth = 0.7;
     ctx.stroke();
   }
@@ -217,7 +231,11 @@ export function paintPlant(
     ctx.fill();
   }
 
-  for (const b of plant.blooms) {
+  // Per-bloom foreshortening transform, shared by the petal and centre passes.
+  const withBloomTransform = (
+    b: (typeof plant.blooms)[number],
+    draw: () => void,
+  ): void => {
     ctx.save();
     // Nodding foreshortening: a bloom on a downward-pointing shoot is seen obliquely, so
     // squash it across the shoot axis. Without this every bloom faced the viewer dead-on
@@ -226,59 +244,71 @@ export function paintPlant(
     ctx.translate(b.center.x, b.center.y);
     ctx.scale(1, squash);
     ctx.translate(-b.center.x, -b.center.y);
-
-    // Calyx first — behind the corolla, showing through the gaps between petals.
-    for (const s of b.sepals) {
-      fillPetal(ctx, petalPath(s), PALETTE.sepal, PALETTE.stemInk);
-    }
-
-    // A receptacle disc behind the petals, so the middle of a bloom is never a hole in
-    // the ground. Doubled blooms previously darkened to a near-black spiral void.
-    ctx.fillStyle = petalColor(b.hueClass, b.white, 0.55);
-    ctx.beginPath();
-    ctx.arc(b.center.x, b.center.y, b.radius * 0.36, 0, Math.PI * 2);
-    ctx.fill();
-
-    for (const p of b.petals) {
-      const fill = petalColor(b.hueClass, b.white, p.colorDepth);
-      // The contour must beat the FILL in value or it vanishes. At 0.55 alpha over a
-      // mid-lightness pink it was invisible — the geometry was there, the contrast was not,
-      // which is why the white panel was the only one that read as a layered flower.
-      fillPetal(ctx, petalPath(p), fill, PALETTE.petalInk);
-    }
-
-    // Singles show a stamen boss. Doubles convert stamens to petals (ABC C-function), so
-    // they get a lit furled centre instead — biology preserved, but no black void.
-    if (b.stamens) {
-      ctx.fillStyle = PALETTE.stamen;
-      ctx.beginPath();
-      ctx.arc(
-        b.center.x,
-        b.center.y,
-        Math.max(1.6, b.radius * 0.17),
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-      ctx.strokeStyle = PALETTE.petalInk;
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-    } else {
-      ctx.fillStyle = petalColor(b.hueClass, b.white, 1);
-      ctx.beginPath();
-      ctx.arc(
-        b.center.x,
-        b.center.y,
-        Math.max(1.8, b.radius * 0.19),
-        0,
-        Math.PI * 2,
-      );
-      ctx.fill();
-      ctx.strokeStyle = PALETTE.petalInk;
-      ctx.lineWidth = 0.8;
-      ctx.stroke();
-    }
+    draw();
     ctx.restore();
+  };
+
+  // PASS 2 — petals for every bloom.
+  //
+  // NOTE: sepals are deliberately NOT drawn. A calyx was added here to fill the gaps
+  // between petals, and it backfired badly: on a front-facing open flower the sepals are
+  // hidden in reality, so drawing them inserted hard green wedges exactly where
+  // petal-on-petal overlap should be, which ENTRENCHED the pinwheel read it was meant to
+  // cure. Bloom.sepals is still generated for a future profile/bud view.
+  for (const b of plant.blooms) {
+    withBloomTransform(b, () => {
+      // A receptacle disc behind the petals, so the middle of a bloom is never a hole in
+      // the ground. Doubled blooms previously darkened to a near-black spiral void.
+      ctx.fillStyle = petalColor(b.hueClass, b.white, 0.55);
+      ctx.beginPath();
+      ctx.arc(b.center.x, b.center.y, b.radius * 0.36, 0, Math.PI * 2);
+      ctx.fill();
+
+      for (const p of b.petals) {
+        const fill = petalColor(b.hueClass, b.white, p.colorDepth);
+        // LIGHT rim, not dark ink — see the PALETTE comment. A dark contour on a dark
+        // ground rendered correctly and was still invisible.
+        fillPetal(ctx, petalPath(p), fill, PALETTE.petalRim);
+      }
+    });
+  }
+
+  // PASS 3 — centres, AFTER every petal in the plant.
+  //
+  // Drawing each bloom's centre immediately after its own petals meant the NEXT bloom's
+  // petals buried it: measured 4 visible centres against ~13 bloom-sized units, so two
+  // thirds of the flowers read as centreless petal piles.
+  for (const b of plant.blooms) {
+    withBloomTransform(b, () => {
+      if (b.stamens) {
+        ctx.fillStyle = PALETTE.stamen;
+        ctx.beginPath();
+        ctx.arc(
+          b.center.x,
+          b.center.y,
+          Math.max(1.8, b.radius * 0.18),
+          0,
+          Math.PI * 2,
+        );
+        ctx.fill();
+      } else {
+        // Doubles convert stamens to petals (ABC C-function), so no stamen boss — but the
+        // furled centre still catches light, and it keeps the yellow eye language.
+        ctx.fillStyle = PALETTE.stamen;
+        ctx.beginPath();
+        ctx.arc(
+          b.center.x,
+          b.center.y,
+          Math.max(1.4, b.radius * 0.12),
+          0,
+          Math.PI * 2,
+        );
+        ctx.fill();
+      }
+      ctx.strokeStyle = PALETTE.petalDivide;
+      ctx.lineWidth = 0.7;
+      ctx.stroke();
+    });
   }
   ctx.restore();
 }

@@ -29,12 +29,15 @@ function rawProfile(shape: PetalShape, t: number): number {
     // disconnected lumps in a ring. Frequencies are also low enough to stay resolvable at
     // the sample count used by petalPath — undersampling a periodic margin is what turned
     // these outlines into axis-aligned stair-steps.
+    // Amplitudes are LARGE on purpose. At 0.26/0.20 these two alleles changed total petal
+    // area by 0.5% and 2.3% against baseline and were invisible at the size the game
+    // actually renders — measured, not guessed. A gene the player cannot see is not a gene.
     case "lobed":
-      // Two broad scallops per margin.
-      return b * (1 + 0.26 * Math.cos(4 * Math.PI * t) * Math.sin(Math.PI * t));
+      // Deep scallops: three big rounded lobes down each margin.
+      return b * (1 + 0.62 * Math.cos(6 * Math.PI * t) * Math.sin(Math.PI * t));
     case "frilled":
-      // A ruffled margin: more, shallower undulations.
-      return b * (1 + 0.2 * Math.sin(8 * Math.PI * t) * Math.sin(Math.PI * t));
+      // Many shallower, tighter ruffles — a different rhythm from lobed, not a milder one.
+      return b * (1 + 0.4 * Math.sin(15 * Math.PI * t) * Math.sin(Math.PI * t));
   }
 }
 
@@ -62,8 +65,14 @@ function halfWidth(shape: PetalShape, t: number): number {
 const SHAPE_WIDTH: Record<PetalShape, number> = {
   round: 1.0,
   pointed: 0.6,
-  lobed: 1.12,
-  frilled: 1.04,
+  // Lobed and frilled were 1.12 / 1.04 — near-identical proportions, so the two alleles
+  // differed only in margin rhythm and measured within 5.6% of each other in area. Broad
+  // scalloped versus narrow ruffled separates them by silhouette, not just by texture.
+  // Widening lobed past ~1.2 drops its aspect below the anti-square floor of 1.25, which
+  // is the constraint that prevents the pinwheel regression — so the separation between
+  // these two alleles is carried mostly by narrowing frilled instead.
+  lobed: 1.18,
+  frilled: 0.85,
 };
 
 /** Symmetric petal outline, rotated by spec.angle and translated to spec.center. */

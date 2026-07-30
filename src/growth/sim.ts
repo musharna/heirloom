@@ -35,7 +35,10 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       id: nextId++,
       pos: { ...origin },
       dir: UP,
-      width: pheno.baseWidth,
+      // A branchier plant carries more canopy, so its trunk is thicker (pipe-model
+      // reasoning). Without this, the max-branching plant grew 3.2x the flower mass on a
+      // trunk THINNER than baseline's and read as "a pink cloud balanced on a stick".
+      width: pheno.baseWidth * (1 + 0.6 * pheno.branchiness),
       age: 0,
       depth: 0,
       vigourLeft: maxTicks,
@@ -60,9 +63,13 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       //    only ~14 ticks meant a weeping plant rose barely 40 units before arching, so it
       //    flopped straight back to the ground and read as a stub. Weeping habit is a tall
       //    shoot with a pendant tip, not a short arch.
-      const droopRamp = Math.min(1, tip.age / 34);
+      //    Ramp lengthened again and the coefficient softened: at /34 and 0.09 a weeping
+      //    plant still lost 40% of its height and landed in the same size class as the
+      //    low-vigour phenotype, so droop was confounding with vigour. Droop must change
+      //    the SHAPE of the shoot, not how tall it gets.
+      const droopRamp = Math.min(1, tip.age / 52);
       const turn =
-        pheno.droop * droopRamp * 0.09 * angleDelta(tip.dir, DOWN) +
+        pheno.droop * droopRamp * 0.062 * angleDelta(tip.dir, DOWN) +
         pheno.phototropism * 0.05 * angleDelta(tip.dir, UP) +
         (rand() - 0.5) * 0.25;
       tip.dir += turn * (1 - pheno.stiffness * 0.7);

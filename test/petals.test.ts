@@ -71,6 +71,31 @@ describe("petalPath", () => {
     expect(nearTip("pointed")).toBeLessThan(nearTip("round"));
   });
 
+  it("changes petal AREA enough per allele to be visible at render scale", () => {
+    // Measured failure this guards: lobed and frilled changed total petal area by 0.5% and
+    // 2.3% against baseline, so both were invisible at the size the game renders and only
+    // resolved above 5x zoom. A gene the player cannot see is not a gene.
+    const area = (s: PetalShape): number => {
+      const pts = petalPath(spec(s));
+      let a = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i]!;
+        const q = pts[(i + 1) % pts.length]!;
+        a += p.x * q.y - q.x * p.y;
+      }
+      return Math.abs(a) / 2;
+    };
+    const base = area("round");
+    for (const s of ["pointed", "lobed", "frilled"] as PetalShape[]) {
+      const delta = Math.abs(area(s) - base) / base;
+      expect(delta).toBeGreaterThan(0.08);
+    }
+    // And lobed must differ from frilled, or shipping both is pointless.
+    expect(Math.abs(area("lobed") - area("frilled")) / base).toBeGreaterThan(
+      0.06,
+    );
+  });
+
   it("makes the four shape alleles geometrically distinct", () => {
     // The P locus is only meaningful if its alleles actually look different.
     const sigs = ALL.map((s) =>

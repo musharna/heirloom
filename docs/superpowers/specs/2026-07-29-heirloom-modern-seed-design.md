@@ -179,7 +179,7 @@ deliberately outside the genome-determined structure.
 3. **Wiring** — genes → growth; garden plots; the four verbs. **DONE 2026-07-30 — see §15.**
    grows from `express(genome)` seeded by `genomeSeed(genome)`. The four verbs are not built._
 4. **Accumulation** — retirement, background compositing, depth-of-field. **DONE 2026-07-30 — see §16.**
-5. **Sharing and persistence** — URL round-trip, localStorage.
+5. **Sharing and persistence** — URL round-trip, localStorage. **DONE 2026-07-30 — see §17.**
 
 Milestone 1 first is not incidental: it front-loads the only risk that can invalidate the whole
 visual premise.
@@ -419,3 +419,57 @@ guarantee**, and a rAF loop is a single point of failure for everything drawn.
 
 Nothing persists across a reload, and the share codes are displayed but not in the URL. That is
 Milestone 5, the last one.
+
+## 17. Milestone 5 outcome — persistence and sharing
+
+Built 2026-07-30 at `c2b376c`. 175 tests, `tsc --noEmit` clean. Files: `src/game/save.ts`,
+`tools/drive-persist.mjs`.
+
+localStorage holds **genomes, not geometry**. Plants are re-expressed and re-grown on load,
+which is what lets a saved garden survive a change to the growth engine or the renderer; storing
+geometry would pin every past plant to the code that drew it. The background is likewise rebuilt
+from the replay list rather than stored as an image, capped at 60 entries — beyond that a layer
+has washed below 5% contrast anyway, so the cap costs nothing visible.
+
+Sharing puts the genome in the URL **fragment**, so it never reaches a server.
+
+Every failure is named and shown in amber: a wrong save version, a corrupt genome in a named
+plot or tray slot, a rejected share link, a failed write. A save that silently resets is the
+worst outcome available here — the player loses a breeding history, is told nothing, and the bug
+that ate it leaves no trace.
+
+### Three bugs no fixture could have caught
+
+1. **The history eraser.** Deriving the save's replay list from `garden.retired` looks obviously
+   correct and would have deleted the player's whole background one session at a time: a
+   restored garden's `retired` is EMPTY, because its plants went straight into the buffer. The
+   first save after each reload would write `replay: []`. The caller now owns the running log.
+2. **The silent share link.** The fragment was read only at module load. Changing a fragment does
+   not reload a page, so a link pasted into a tab that already had the garden open did nothing at
+   all — silently, which is the worst way for a feature not to work. Now also handled on
+   `hashchange`, with the fragment cleared afterwards so a refresh cannot plant the gift twice.
+3. **A shadowed global.** A module-level `history` array shadowed `window.history`, which would
+   have made `history.replaceState` a method call on an array.
+
+### Verification
+
+A 14-check driver builds a garden through the real verbs, waits out the save debounce, reloads
+the page, and asserts the same plants came back — with a negative control proving those
+assertions FAIL when storage is cleared (otherwise a game that regenerated an identical garden
+from a fixed seed would pass with localStorage doing nothing), and both genome-rejection paths
+exercised separately, since all-zero bytes trip the version check before the checksum is reached.
+
+Mutation results: `replay dropped`, `version check skipped`, `save never written` and `share link
+ignored` were all killed by the driver. `ages not restored` **survived the driver** and is killed
+by the unit suite instead — the correct division, since age arithmetic lives in `save.ts` and the
+driver's job is the reload path.
+
+## 18. Status
+
+All five milestones are built. What the original had and this now also has: click-to-clone,
+drag-to-crossbreed, seeds as objects, an accumulating background, a shareable genome string, and
+endless pressure-free drift. What it adds: a real Mendelian gene model with dominance, an allele
+series, dosage and epistasis, in place of averaged numbers.
+
+Residual visual backlog remains as recorded in §13 — stem outline jitter, back-row petal shape,
+sparse and identical leaf stamps, and colour that is vivid rather than muted-saturated.

@@ -277,6 +277,9 @@ opened the canopy so branch geometry reads. Ground is an irregular lit crest, no
 
 ### Known residual defects (backlog, not blockers)
 
+> **Superseded 2026-07-30 by §19.** Entries 1 and 2 were RETRACTED on measurement — already
+> fixed, and carried forward unverified for three sessions. The rest were addressed.
+
 1. Stem outline jitters — width oscillates up to ±33% of local width between adjacent rows,
    because outlines are built per-tick rather than as one continuous smoothed path.
 2. Back-row petals inside a dense bloom still read as rounded quadrilaterals.
@@ -473,3 +476,57 @@ series, dosage and epistasis, in place of averaged numbers.
 
 Residual visual backlog remains as recorded in §13 — stem outline jitter, back-row petal shape,
 sparse and identical leaf stamps, and colour that is vivid rather than muted-saturated.
+
+## 19. Visual pass — and a retracted backlog
+
+Done 2026-07-30. 183 tests, `tsc --noEmit` clean, all three drivers pass.
+
+### Two of the five defects did not exist
+
+§13.1 claimed stem outlines jittered "up to ±33% of local width... because outlines are built
+per-tick rather than as one continuous smoothed path". **Measured: 0.0% width error, 0.7%
+step-to-step oscillation.** `paintPlant` already built one outline per chain; the defect had been
+fixed by earlier smoothing work and the entry was never updated. It was then quoted three times
+in later sessions as though still true. §13.2 (back-row petals as rounded quadrilaterals) was
+likewise not reproducible — the obovate profile had resolved it.
+
+**A backlog is a claim like any other, and the Iron Law applies to it.** Re-measure before
+working from an entry, and especially before quoting one.
+
+### What the magnification actually showed
+
+The §13 list was written from full-frame screenshots, where a bloom is ~40px across. At 4x
+(`tools/zoom.mjs`) the dominant defect was not on the list at all: **stems and leaves were flat
+ribbons** — one fill colour plus a rim, no shading — and between them they are most of a plant's
+area. No amount of petal work would have fixed that.
+
+- **Stems** are now shaded with nested strips at falling alpha, offset along the LIT side as the
+  stroke curves. A single band leaves a hard polygon edge that reads as a stripe painted on;
+  three approximate a curved surface. A gradient would be better but cannot follow a curve.
+- **Leaves** gained a curved midline, pinnate veins angled forward, a lit-to-shadow gradient, and
+  per-leaf variation in fatness, serration and curl. Length and angle alone had left every blade
+  the same outline at a different size, which at magnification is one stamp repeated.
+- **Lighting** comes from one shared `LIGHT` vector. Lighting each element in its own local frame
+  is what makes procedural art read as a sheet of decals: a stem lit from its own left and a leaf
+  lit from its own left face different real directions the moment either rotates.
+- **Colour** is per-hue. Equal HSL saturation does not give equal perceived intensity — at S=72
+  blue and violet read like UI accent colours while coral read like a flower. Each class now
+  carries its own S and L, pulled hardest where the hue is least forgiving.
+- **Petal rim width scales with the petal.** A fixed 1px rim is correct at one size only; on a
+  doubled bloom's inner whorl a petal is ~3px wide and the outline claimed most of its area, so
+  those flowers rendered as white filigree with a trace of colour.
+- **`pointed` widened 0.6 → 0.76.** A lanceolate profile already tapers at both ends, and the
+  width multiplier narrowed it again: five of them rendered as an asterisk, not a flower.
+
+### The rim rule was a threshold pretending to be a measurement
+
+`petalRim` flipped to a dark rim above lightness 76. That held only while every hue shared one
+lightness. The moment violet and blue moved lighter, their innermost whorls landed at 74 — just
+under the line — and kept a light rim with 51 units of contrast against a 55-unit requirement.
+
+It now compares both candidate rims and returns whichever has more contrast. No threshold to
+tune, and a later colour change cannot knock it out of range. The function's own docstring had
+said contrast decides; it just never measured it.
+
+Found by extending the rim test to sweep all five hue classes instead of the default one — the
+single-hue sweep left four fills unchecked.

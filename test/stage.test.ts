@@ -6,7 +6,11 @@ import {
   fitPlant,
   cullOccludedBlooms,
 } from "../src/render/stage";
-import { petalLightness, petalRim } from "../src/render/petals";
+import {
+  petalLightness,
+  petalRim,
+  petalRimWidth,
+} from "../src/render/petals";
 import { growPlant } from "../src/growth/sim";
 import type { Bloom, Phenotype } from "../src/types";
 
@@ -73,14 +77,31 @@ describe("silhouette rim colours", () => {
     // flower: on the white morph the fill is ~(229,227,220), so a light rim had no
     // contrast to give and the petals fused into a smear. Every fill must get a rim that
     // differs from it substantially, whichever direction that requires.
+    //
+    // Swept over ALL FIVE hue classes, not just the default. Lightness now varies per hue
+    // (violet and blue sit lighter, because equal HSL saturation does not give equal
+    // perceived intensity), so a single-hue sweep would leave four fills unchecked and any
+    // future tone tweak could silently push one across the rim threshold.
     for (const white of [false, true]) {
-      for (const depth of [0, 0.5, 1]) {
-        const fillL = (petalLightness(white, depth) / 100) * 255;
-        expect(Math.abs(lum(petalRim(white, depth)) - fillL)).toBeGreaterThan(
-          55,
-        );
+      for (const hue of [0, 1, 2, 3, 4]) {
+        for (const depth of [0, 0.5, 1]) {
+          const fillL = (petalLightness(white, depth, hue) / 100) * 255;
+          expect(
+            Math.abs(lum(petalRim(white, depth, hue)) - fillL),
+          ).toBeGreaterThan(55);
+        }
       }
     }
+  });
+
+  it("scales the petal rim with the petal, and clamps at both ends", () => {
+    // A fixed 1px rim is correct at exactly one petal size. On a doubled bloom's inner whorl
+    // a petal is ~3px wide, and an outline down both margins claimed most of its area — those
+    // flowers rendered as white filigree with a trace of colour.
+    expect(petalRimWidth(30)).toBeGreaterThan(petalRimWidth(4));
+    expect(petalRimWidth(3)).toBeGreaterThan(0); // never vanishes
+    expect(petalRimWidth(3)).toBeLessThan(0.55); // never dominates a small petal
+    expect(petalRimWidth(400)).toBeLessThanOrEqual(1.1); // never becomes a border
   });
 
   it("gives a pale fill a DARK rim and a mid fill a LIGHT one", () => {

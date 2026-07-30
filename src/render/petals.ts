@@ -69,7 +69,11 @@ function halfWidth(shape: PetalShape, t: number): number {
  */
 const SHAPE_WIDTH: Record<PetalShape, number> = {
   round: 1.0,
-  pointed: 0.6,
+  // 0.6 was too narrow to read as a petal. At 4x magnification a five-petal `pointed` whorl
+  // rendered as an asterisk — five spikes radiating from a dot — because a lanceolate profile
+  // already tapers at both ends and the width multiplier narrowed it again on top. 0.76 keeps
+  // it clearly the narrow allele against round's 1.0 while leaving enough blade to be a petal.
+  pointed: 0.76,
   // Lobed and frilled were 1.12 / 1.04 — near-identical proportions, so the two alleles
   // differed only in margin rhythm and measured within 5.6% of each other in area. Broad
   // scalloped versus narrow ruffled separates them by silhouette, not just by texture.
@@ -106,7 +110,25 @@ export function petalAspect(spec: PetalSpec): number {
   return spec.length / (spec.width * SHAPE_WIDTH[spec.shape]);
 }
 
-const HUES = [350, 20, 320, 285, 250]; // crimson, coral, magenta, violet, blue
+/**
+ * Per-hue tone, not one saturation for all five.
+ *
+ * Equal HSL saturation does NOT give equal perceived intensity. At S=72 the blue and violet
+ * classes read electric — like UI accent colours — while the same number on coral reads as a
+ * flower, because the eye is far more tolerant of saturation in warm hues than in the
+ * blue-violet range. Holding S and L constant across the hue wheel was the whole of defect §13.5.
+ *
+ * So each class carries its own saturation and lightness, pulled hardest where the hue is
+ * least forgiving. The art direction asks for muted-saturated; that is a per-hue judgement,
+ * not a global constant.
+ */
+const HUE_TONE: { h: number; s: number; l: number }[] = [
+  { h: 349, s: 58, l: 57 }, // crimson
+  { h: 18, s: 63, l: 60 }, // coral
+  { h: 322, s: 48, l: 60 }, // magenta
+  { h: 288, s: 34, l: 62 }, // violet — pulled hard
+  { h: 238, s: 30, l: 62 }, // blue — pulled hardest, and warmed off pure 250
+];
 
 export function petalColor(
   hueClass: number,
@@ -117,13 +139,24 @@ export function petalColor(
   // doubled bloom's packed inner whorl into a near-black crater — darker than the ground
   // it sat on. Real doubled flowers catch light in the furl, so the ordering is inverted.
   if (white) return `hsl(45 14% ${88 + 7 * colorDepth}%)`;
-  const h = HUES[hueClass] ?? HUES[0]!;
-  return `hsl(${h} ${72 - 6 * colorDepth}% ${56 + 13 * colorDepth}%)`;
+  const t = HUE_TONE[hueClass] ?? HUE_TONE[0]!;
+  return `hsl(${t.h} ${t.s - 5 * colorDepth}% ${t.l + 12 * colorDepth}%)`;
 }
 
-/** HSL lightness percentage of the fill a petal will be painted with. */
-export function petalLightness(white: boolean, colorDepth: number): number {
-  return white ? 88 + 7 * colorDepth : 56 + 13 * colorDepth;
+/**
+ * HSL lightness percentage of the fill a petal will be painted with.
+ *
+ * Takes the hue class now that lightness varies per hue — a duplicated constant here would
+ * drift from `petalColor` the first time either was tuned, and this value decides which rim a
+ * petal gets, so drift would show up as an unreadable outline rather than as a wrong number.
+ */
+export function petalLightness(
+  white: boolean,
+  colorDepth: number,
+  hueClass = 0,
+): number {
+  if (white) return 88 + 7 * colorDepth;
+  return (HUE_TONE[hueClass] ?? HUE_TONE[0]!).l + 12 * colorDepth;
 }
 
 /**
@@ -134,10 +167,31 @@ export function petalLightness(white: boolean, colorDepth: number): number {
  * lightness, is what makes an outline an outline — so a light fill gets a dark rim and a
  * mid/dark fill gets a light one.
  */
-export function petalRim(white: boolean, colorDepth: number): string {
-  return petalLightness(white, colorDepth) > 76
-    ? "rgba(64,52,44,0.7)"
-    : "rgba(255,236,228,0.85)";
+const RIM_DARK = "rgba(64,52,44,0.7)";
+const RIM_LIGHT = "rgba(255,236,228,0.85)";
+/** Approximate luminance of each rim, 0..255, for comparing against a fill. */
+const RIM_DARK_L = (64 + 52 + 44) / 3;
+const RIM_LIGHT_L = (255 + 236 + 228) / 3;
+
+export function petalRim(
+  white: boolean,
+  colorDepth: number,
+  hueClass = 0,
+): string {
+  // Pick whichever rim has MORE contrast, rather than flipping at a fixed lightness.
+  //
+  // The threshold version said "lighter than 76 gets a dark rim", which worked only while
+  // every hue shared one lightness. Once violet and blue moved lighter, their innermost
+  // whorls landed at 74 — just under the line — and kept a light rim with 51 units of
+  // contrast, well below the 55 the rule requires. Those petals would have fused into
+  // exactly the smear this function exists to prevent.
+  //
+  // Comparing both candidates has no threshold to tune and cannot be knocked out of range by
+  // a later colour change: the docstring's own claim is that CONTRAST decides, so measure it.
+  const fillL = (petalLightness(white, colorDepth, hueClass) / 100) * 255;
+  return Math.abs(RIM_DARK_L - fillL) > Math.abs(RIM_LIGHT_L - fillL)
+    ? RIM_DARK
+    : RIM_LIGHT;
 }
 
 /**
@@ -150,8 +204,9 @@ export function petalGlow(
   alpha: number,
 ): string {
   if (white) return `hsl(45 28% 93% / ${alpha})`;
-  const h = HUES[hueClass] ?? HUES[0]!;
-  return `hsl(${h} 85% 66% / ${alpha})`;
+  const t = HUE_TONE[hueClass] ?? HUE_TONE[0]!;
+  // A little hotter than the fill, so a glow reads as light rather than as a second petal.
+  return `hsl(${t.h} ${Math.min(96, t.s + 22)}% ${t.l + 8}% / ${alpha})`;
 }
 
 /**
@@ -178,11 +233,25 @@ export function petalFill(
 }
 
 /** Thin canvas wrapper. No logic worth testing. */
+/**
+ * Rim weight for a petal of a given width.
+ *
+ * A FIXED 1px rim is only correct at one petal size. On a doubled bloom's inner whorl a petal
+ * is ~3px wide, so a 1px outline drawn down both margins claimed most of its area and those
+ * flowers rendered as white filigree with a trace of colour — measured at 4x magnification,
+ * where a small magenta double was almost entirely rim. Scaling with the petal keeps the
+ * line-art reading at every size, and the floor keeps it from vanishing on the smallest.
+ */
+export function petalRimWidth(petalWidth: number): number {
+  return Math.max(0.35, Math.min(1.1, petalWidth * 0.11));
+}
+
 export function fillPetal(
   ctx: CanvasRenderingContext2D,
   pts: Vec2[],
   fill: string | CanvasGradient,
   stroke: string,
+  rimWidth = 1,
 ): void {
   if (pts.length < 3) return;
   ctx.beginPath();
@@ -193,6 +262,6 @@ export function fillPetal(
   ctx.fill();
   // The petal edge IS the line-art of the art direction, so it has to actually read.
   ctx.strokeStyle = stroke;
-  ctx.lineWidth = 1;
+  ctx.lineWidth = rimWidth;
   ctx.stroke();
 }

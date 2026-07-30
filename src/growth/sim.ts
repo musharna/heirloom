@@ -130,6 +130,13 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
           length: scale * (1 - 0.1 * tip.depth) * (0.85 + 0.3 * rand()),
           width: scale * 0.52 * (1 - 0.1 * tip.depth),
           tick,
+          // Per-leaf variation seed. Length and angle alone were not enough: every blade was
+          // the same outline at a different size, which at magnification reads as one stamp
+          // repeated rather than as foliage. This drives blade fatness, serration and curl.
+          seed: rand(),
+          // Which way the blade curls. Following the attachment side keeps a leaf bending
+          // away from its own stem rather than folding back through it.
+          side,
         });
       }
 

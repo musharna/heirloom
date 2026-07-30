@@ -88,6 +88,10 @@ export type LeafSpec = {
   width: number;
   /** Tick at which this leaf was emitted, so foliage also fills in as the plant grows. */
   tick: number;
+  /** 0..1 per-leaf variation: blade fatness, serration, curl. Without it every leaf is one stamp. */
+  seed: number;
+  /** +1 / -1 — the side of the shoot this leaf grew on, so its curl bends away from the stem. */
+  side: number;
 };
 
 export type Plant = {

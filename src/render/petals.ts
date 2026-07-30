@@ -23,12 +23,18 @@ function rawProfile(shape: PetalShape, t: number): number {
     case "pointed":
       // Lanceolate: shoulders pulled in, apex drawn to a genuine point.
       return Math.pow(t, 0.7) * Math.pow(Math.max(0, 1 - t), 0.75);
+    // Both periodic margins fade their amplitude to zero at the base and the apex, via the
+    // sin(PI*t) envelope. Without it the oscillation ran right into the attachment and
+    // pinched the petal away from the receptacle, so a lobed bloom read as five
+    // disconnected lumps in a ring. Frequencies are also low enough to stay resolvable at
+    // the sample count used by petalPath — undersampling a periodic margin is what turned
+    // these outlines into axis-aligned stair-steps.
     case "lobed":
-      // Three large rounded scallops per margin. Silhouette-level, not a 1px notch.
-      return b * (1 + 0.3 * Math.cos(6 * Math.PI * t));
+      // Two broad scallops per margin.
+      return b * (1 + 0.26 * Math.cos(4 * Math.PI * t) * Math.sin(Math.PI * t));
     case "frilled":
-      // Ruffled margin: more undulations, still large enough to read at panel scale.
-      return b * (1 + 0.22 * Math.sin(11 * Math.PI * t));
+      // A ruffled margin: more, shallower undulations.
+      return b * (1 + 0.2 * Math.sin(8 * Math.PI * t) * Math.sin(Math.PI * t));
   }
 }
 
@@ -61,7 +67,7 @@ const SHAPE_WIDTH: Record<PetalShape, number> = {
 };
 
 /** Symmetric petal outline, rotated by spec.angle and translated to spec.center. */
-export function petalPath(spec: PetalSpec, samples = 40): Vec2[] {
+export function petalPath(spec: PetalSpec, samples = 96): Vec2[] {
   const cos = Math.cos(spec.angle);
   const sin = Math.sin(spec.angle);
   const w = spec.width * SHAPE_WIDTH[spec.shape];
@@ -93,10 +99,12 @@ export function petalColor(
   white: boolean,
   colorDepth: number,
 ): string {
-  if (white) return `hsl(45 14% ${94 - 10 * colorDepth}%)`;
+  // Value ramp runs LIGHTER toward the centre, not darker. Darkening inward turned a
+  // doubled bloom's packed inner whorl into a near-black crater — darker than the ground
+  // it sat on. Real doubled flowers catch light in the furl, so the ordering is inverted.
+  if (white) return `hsl(45 14% ${88 + 7 * colorDepth}%)`;
   const h = HUES[hueClass] ?? HUES[0]!;
-  // Lightness floor keeps a doubled bloom's inner whorls from collapsing to a black hole.
-  return `hsl(${h} ${72 - 8 * colorDepth}% ${64 - 16 * colorDepth}%)`;
+  return `hsl(${h} ${72 - 6 * colorDepth}% ${56 + 13 * colorDepth}%)`;
 }
 
 /**

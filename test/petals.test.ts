@@ -92,11 +92,19 @@ describe("petalColor", () => {
     expect(seen.size).toBe(5);
   });
 
-  it("darkens toward the inner whorls", () => {
+  it("LIGHTENS toward the inner whorls, so a doubled centre is never a void", () => {
+    // This test previously asserted the opposite. Darkening inward made a doubled bloom's
+    // packed centre render darker than the ground it sat on, so it read as a hole punched
+    // through the flower. Real doubled flowers catch light in the furl.
     const light = (css: string) => Number(/(\d+(?:\.\d+)?)%\)$/.exec(css)![1]);
-    expect(light(petalColor(0, false, 1))).toBeLessThan(
+    expect(light(petalColor(0, false, 1))).toBeGreaterThan(
       light(petalColor(0, false, 0)),
     );
+    expect(light(petalColor(0, true, 1))).toBeGreaterThan(
+      light(petalColor(0, true, 0)),
+    );
+    // And the inner whorl must clear the dark ground by a wide margin.
+    expect(light(petalColor(0, false, 1))).toBeGreaterThan(40);
   });
 
   it("falls back rather than returning undefined for an out-of-range hue class", () => {

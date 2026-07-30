@@ -32,6 +32,12 @@ export type Tip = {
   depth: number;
   vigourLeft: number;
   alive: boolean;
+  /**
+   * True once this tip has risen clear of the ground zone. The ground-stop rule only
+   * applies afterwards — otherwise a young shoot, which starts AT ground level, is judged
+   * to have already hit the ground and dies on its fourth tick.
+   */
+  cleared: boolean;
 };
 
 export type StrokeSegment = {
@@ -59,12 +65,25 @@ export type Bloom = {
   center: Vec2;
   radius: number;
   petals: PetalSpec[];
+  /** Calyx behind the corolla. Fills the gaps between petals so a bloom reads layered. */
+  sepals: PetalSpec[];
   hueClass: number;
   white: boolean;
   stamens: boolean; // false when doubled
+  /** 0 = face-on, 1 = the shoot points straight down. Drives nodding foreshortening. */
+  tilt: number;
+};
+
+/** A leaf blade attached to a point on a stem. */
+export type LeafSpec = {
+  attach: Vec2;
+  angle: number; // radians — direction the blade points
+  length: number;
+  width: number;
 };
 
 export type Plant = {
   segments: StrokeSegment[];
   blooms: Bloom[];
+  leaves: LeafSpec[];
 };

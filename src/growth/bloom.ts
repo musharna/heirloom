@@ -1,3 +1,4 @@
+import { angleDelta } from "../rng";
 import type { Bloom, Phenotype, PetalSpec, Vec2 } from "../types";
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5)); // ~137.5 degrees
@@ -44,12 +45,39 @@ export function layoutBloom(
     }
   }
 
+  // Calyx: sepals sit BEHIND the corolla, offset by half a petal step so each one shows
+  // through the gap between two petals. Every flower has one, and it is what turns five
+  // separated petals into a layered bloom instead of a five-bladed pinwheel with raw
+  // background showing between the blades.
+  const sepals: PetalSpec[] = [];
+  const sepalCount = 5;
+  const sepalSpacing = (Math.PI * 2) / sepalCount;
+  for (let k = 0; k < sepalCount; k++) {
+    sepals.push({
+      center: { ...center },
+      angle: faceAngle + sepalSpacing / 2 + k * sepalSpacing,
+      length: pheno.bloomRadius * 0.82,
+      width: pheno.bloomRadius * 0.5,
+      shape: "pointed",
+      colorDepth: 0,
+    });
+  }
+
+  // How far the shoot has turned away from straight up, normalised. A bloom on a
+  // downward-pointing shoot is seen obliquely, so the renderer foreshortens it.
+  const tilt = Math.min(
+    1,
+    Math.abs(angleDelta(faceAngle, -Math.PI / 2)) / Math.PI,
+  );
+
   return {
     center: { ...center },
     radius: pheno.bloomRadius,
     petals,
+    sepals,
     hueClass: pheno.hueClass,
     white: pheno.white,
     stamens: !pheno.doubled,
+    tilt,
   };
 }

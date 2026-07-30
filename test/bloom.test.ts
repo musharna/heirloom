@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { layoutBloom } from "../src/growth/bloom";
+import { petalAspect } from "../src/render/petals";
 import { mulberry32 } from "../src/rng";
 import type { Phenotype } from "../src/types";
 
@@ -57,14 +58,30 @@ describe("layoutBloom", () => {
     expect(firstOfWhorl(2) - firstOfWhorl(1)).toBeCloseTo(golden, 5);
   });
 
-  it("makes petals broad enough to touch their neighbours", () => {
-    // Narrow petals leave visible gaps and read as star points rather than a flower.
-    const b = layoutBloom(SINGLE, c, 0, mulberry32(1));
-    const p = b.petals[0]!;
-    // Chord subtended by the petal must reach the neighbour's spacing at mid-length.
-    const spacing = (Math.PI * 2) / 5;
-    const neighbourGap = 2 * (p.length / 2) * Math.sin(spacing / 2);
-    expect(p.width).toBeGreaterThanOrEqual(neighbourGap * 0.9);
+  it("keeps every petal longer than it is wide", () => {
+    // This REPLACES a test that demanded neighbouring petals touch with no gap. On a
+    // 5-petal whorl that is impossible unless width exceeds length, so satisfying it
+    // produced square petals and a pinwheel bloom. Aspect ratio is the real constraint.
+    for (const pheno of [SINGLE, DOUBLE]) {
+      for (const p of layoutBloom(pheno, c, 0, mulberry32(1)).petals) {
+        const aspect = petalAspect(p);
+        expect(aspect).toBeGreaterThan(1.25);
+        expect(aspect).toBeLessThan(3.2);
+      }
+    }
+  });
+
+  it("never produces a square petal for any shape allele", () => {
+    // The exact regression the critic caught: aspect 1.05 across the board.
+    for (const shape of ["round", "pointed", "lobed", "frilled"] as const) {
+      const b = layoutBloom(
+        { ...SINGLE, petalShape: shape },
+        c,
+        0,
+        mulberry32(1),
+      );
+      expect(petalAspect(b.petals[0]!)).toBeGreaterThan(1.25);
+    }
   });
 
   it("makes inner whorls smaller and darker", () => {

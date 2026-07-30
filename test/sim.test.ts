@@ -66,6 +66,47 @@ describe("growPlant", () => {
     expect(highest(upright.segments)).toBeLessThan(highest(weeping.segments));
   });
 
+  it("makes even a max-droop plant RISE from its base before it arches over", () => {
+    // The defect: full gravitropism from tick 0 turned the shoot down at its own base, so
+    // the plant grew downward out of mid-air and its thickest end ended up at the top of
+    // the frame. A weeping plant must still ascend first.
+    const origin = at();
+    const weeping = growPlant(
+      { ...BASE, droop: 1, phototropism: 0.15, branchiness: 0 },
+      11,
+      origin,
+    );
+    const highest = Math.min(...weeping.segments.map((s) => s.y1));
+    // "Higher on screen than where it started", by a clear margin, not a rounding error.
+    expect(highest).toBeLessThan(origin.y - 20);
+  });
+
+  it("stops a shoot at ground level instead of growing underground", () => {
+    // A max-droop shoot used to curve past horizontal and hang far below its own base,
+    // which framed as a plant dangling off the bottom of its plot.
+    const origin = { x: 0, y: 0 };
+    const weeping = growPlant(
+      { ...BASE, droop: 1, phototropism: 0.1 },
+      11,
+      origin,
+    );
+    const deepest = Math.max(
+      ...weeping.segments.map((s) => Math.max(s.y0, s.y1)),
+    );
+    // One step's overshoot past ground is fine; a long underground descent is not.
+    expect(deepest).toBeLessThan(origin.y + 12);
+  });
+
+  it("separates a mid-branchiness plant from a max-branchiness one on the SAME seed", () => {
+    // Branch probability used to span only 0.044..0.08 per tick, so with one shared RNG
+    // stream a "bushy" phenotype produced a plant identical to its baseline.
+    const mid = growPlant({ ...BASE, branchiness: 0.55 }, 20260729, at());
+    const max = growPlant({ ...BASE, branchiness: 1.0 }, 20260729, at());
+    const chains = (p: typeof mid) =>
+      new Set(p.segments.map((s) => s.chain)).size;
+    expect(chains(max)).toBeGreaterThan(chains(mid));
+  });
+
   it("makes more chains when branchier", () => {
     const sparse = growPlant({ ...BASE, branchiness: 0 }, 5, at());
     const bushy = growPlant({ ...BASE, branchiness: 1 }, 5, at());

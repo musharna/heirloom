@@ -38,7 +38,9 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       // A branchier plant carries more canopy, so its trunk is thicker (pipe-model
       // reasoning). Without this, the max-branching plant grew 3.2x the flower mass on a
       // trunk THINNER than baseline's and read as "a pink cloud balanced on a stick".
-      width: pheno.baseWidth * (1 + 0.6 * pheno.branchiness),
+      // 0.6 was far too weak to read: the max-branching trunk measured 16px against
+      // baseline's 14px while carrying 2.8x the canopy area.
+      width: pheno.baseWidth * (1 + 1.3 * pheno.branchiness),
       age: 0,
       depth: 0,
       vigourLeft: maxTicks,

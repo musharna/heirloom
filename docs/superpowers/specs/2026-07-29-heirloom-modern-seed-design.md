@@ -1,18 +1,18 @@
-# Heirloom — a modernized *Seed* — design
+# Heirloom — a modernized _Seed_ — design
 
 > Status: approved 2026-07-29. Working title "Heirloom" is easily renamed.
 
 ## 1. Context
 
-[*Seed*](https://www.noio.nl/2007/12/seed/) (noio / Thomas van den Berg, December 2007) was a Flash
+[_Seed_](https://www.noio.nl/2007/12/seed/) (noio / Thomas van den Berg, December 2007) was a Flash
 toy-game about breeding flowers. Its history matters to this design:
 
 - It began as a **screensaver** — draw a few branches with bezier curves and varying branch widths,
   spawn flowers, repeat, and let older flowers fade into the background so an ever-growing forest
   accumulates.
 - It rendered to `bitmapData` rather than vectors, for performance.
-- The game emerged from one observation, in the author's words: *"the variables for different flowers
-  could easily be averaged, creating the cross-breed of two flowers."* A flower was a numeric genome.
+- The game emerged from one observation, in the author's words: _"the variables for different flowers
+  could easily be averaged, creating the cross-breed of two flowers."_ A flower was a numeric genome.
 - Interaction: click a flower to clone it, drag one flower onto another to crossbreed (the child
   spawns into a free patch of dirt). Seeds were physical objects you dragged to plant or splice.
   Mutation drifted lineages over generations. Flowers serialized to a shareable string.
@@ -26,25 +26,25 @@ The user has an existing 3D flower-breeding project at `~/flower` (three.js, Men
 engine, last commit 2026-06-13, no remote). It is **deliberately out of scope**: the user chose to
 start de novo, with no code or genetics ported. It is referenced here only for one transferable
 lesson — that project accumulated four consecutive critic-gated failures pursuing photoreal
-procedural rose petals, and the recorded lesson was to judge pixels from the *real* pipeline rather
+procedural rose petals, and the recorded lesson was to judge pixels from the _real_ pipeline rather
 than from an isolated approximation. That lesson shapes Milestone 1 below.
 
 ## 2. Goal and locked decisions
 
-Build a browser game that keeps *Seed*'s soul and modernizes exactly three things: the genetics, the
+Build a browser game that keeps _Seed_'s soul and modernizes exactly three things: the genetics, the
 rendering, and shareability. Each decision below was chosen explicitly, with the rationale recorded
 so a later reader knows what was traded away.
 
-| Decision | Choice | Rationale |
-| --- | --- | --- |
-| Codebase | De novo, standalone | User's call. No dependency on or port from `~/flower`. |
-| Scope | Same soul, deeper genetics | One canvas, no menus, no win condition, endless drift. Modernize genetics + rendering + sharing only. Adding goals risks destroying what made *Seed* memorable. |
-| Gene model | Two-layer: genotype → growth program | Alleles at named loci (plus polygenic blocks) resolve to a parameter set, which drives a developmental growth program. Buys Mendelian surprise *and* emergent morphology. Costs one layer of indirection. |
-| World | One screen, accumulating background | Fixed viewport, a handful of foreground plots; retiring flowers composite into a persistent background layer that densifies over time. Zero navigation UI, and the background becomes a record of the player's breeding history. |
-| Art direction | Refined ink line-art on dark ground | Tapered bezier strokes, layered petal shapes, muted-saturated colour, soft bloom, depth-of-field on background layers. The one style where procedural generation is a strength rather than a fight. |
-| Growth engine | Tropism-based agent growth | Growing tips step, bend under tropisms, branch stochastically, terminate in a bloom. Growth animation *is* the simulation (one system, not a replay layer), and genes read as behaviours rather than as static angles. |
-| Platform | Browser; TypeScript + Vite; no UI framework | There is almost no UI; a framework would be pure overhead. |
-| Rendering API | Canvas2D + offscreen accumulation buffer | This is the original's `bitmapData` trick and remains the correct tool: the background forest costs one texture instead of thousands of live objects. WebGL only if the Milestone 1 spike proves it necessary. |
+| Decision      | Choice                                      | Rationale                                                                                                                                                                                                                        |
+| ------------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Codebase      | De novo, standalone                         | User's call. No dependency on or port from `~/flower`.                                                                                                                                                                           |
+| Scope         | Same soul, deeper genetics                  | One canvas, no menus, no win condition, endless drift. Modernize genetics + rendering + sharing only. Adding goals risks destroying what made _Seed_ memorable.                                                                  |
+| Gene model    | Two-layer: genotype → growth program        | Alleles at named loci (plus polygenic blocks) resolve to a parameter set, which drives a developmental growth program. Buys Mendelian surprise _and_ emergent morphology. Costs one layer of indirection.                        |
+| World         | One screen, accumulating background         | Fixed viewport, a handful of foreground plots; retiring flowers composite into a persistent background layer that densifies over time. Zero navigation UI, and the background becomes a record of the player's breeding history. |
+| Art direction | Refined ink line-art on dark ground         | Tapered bezier strokes, layered petal shapes, muted-saturated colour, soft bloom, depth-of-field on background layers. The one style where procedural generation is a strength rather than a fight.                              |
+| Growth engine | Tropism-based agent growth                  | Growing tips step, bend under tropisms, branch stochastically, terminate in a bloom. Growth animation _is_ the simulation (one system, not a replay layer), and genes read as behaviours rather than as static angles.           |
+| Platform      | Browser; TypeScript + Vite; no UI framework | There is almost no UI; a framework would be pure overhead.                                                                                                                                                                       |
+| Rendering API | Canvas2D + offscreen accumulation buffer    | This is the original's `bitmapData` trick and remains the correct tool: the background forest costs one texture instead of thousands of live objects. WebGL only if the Milestone 1 spike proves it necessary.                   |
 
 ## 3. Architecture
 
@@ -81,7 +81,7 @@ Genome ──express()──▶ Phenotype ──sim(seed)──▶ primitives �
   - `strokes.ts` — takes the polyline of per-tick segments emitted by the sim (§6), smooths it
     (Catmull-Rom through the tick points), and fills the resulting variable-width outline polygon.
     Varying width is the original's signature move; a constant-width `lineTo` will not read
-    correctly. Note the curve is *emergent from the growth path*, not authored as cubic bezier
+    correctly. Note the curve is _emergent from the growth path_, not authored as cubic bezier
     control points — the implementer fits nothing.
   - `stage.ts` — three layers: background accumulation buffer, mid-ground recently-retired plants,
     live foreground plants. Compositing, vignette, soft bloom.
@@ -95,30 +95,30 @@ Genome ──express()──▶ Phenotype ──sim(seed)──▶ primitives �
 
 All direct manipulation. No buttons drive gameplay.
 
-| Verb | Gesture | Effect |
-| --- | --- | --- |
-| Clone | click a bloom | Produces a seed of that genome, with mutation applied. |
-| Cross | drag bloom A onto bloom B | Produces a child seed from `inherit(A, B)` + mutation. |
-| Plant | drag a seed onto a plot | Seed germinates; the plant grows on screen, revealing its traits over time. |
-| Splice | drag a seed onto another seed | Crosses two genomes without planting either. |
+| Verb   | Gesture                       | Effect                                                                      |
+| ------ | ----------------------------- | --------------------------------------------------------------------------- |
+| Clone  | click a bloom                 | Produces a seed of that genome, with mutation applied.                      |
+| Cross  | drag bloom A onto bloom B     | Produces a child seed from `inherit(A, B)` + mutation.                      |
+| Plant  | drag a seed onto a plot       | Seed germinates; the plant grows on screen, revealing its traits over time. |
+| Splice | drag a seed onto another seed | Crosses two genomes without planting either.                                |
 
 Traits are **not** disclosed before bloom. The reveal-by-growing is the pacing mechanism.
 
 ## 5. Genetics content
 
-Eight loci, chosen so that each contributes a *different kind* of surprise rather than more of the
+Eight loci, chosen so that each contributes a _different kind_ of surprise rather than more of the
 same. Deliberately small; extending is cheap, and an over-large gene set makes nothing legible.
 
-| Locus | Symbol | Kind | Alleles | Inheritance | Effect |
-| --- | --- | --- | --- | --- | --- |
-| Pigment block | `W` | discrete | `W` (block), `w` (permit) | `W` dominant | `W_` → no anthocyanin; flower reads white/cream **regardless of hue loci**. `ww` → hue expressed. |
-| Hue A | `H1` | discrete, dosage | `H1`, `h1` | additive dosage | Contributes to hue class. |
-| Hue B | `H2` | discrete, dosage | `H2`, `h2` | additive dosage | Contributes to hue class. |
-| Doubling | `D` | discrete | `D` (single), `d` (double) | `d` recessive | `dd` → stamens convert to petals (ABC-model behaviour): petal count multiplies, stamen ring absent. |
-| Petal shape | `P` | allele series | `P^f` frilled > `P^l` lobed > `P^p` pointed > `p` round | hierarchical dominance | Selects the petal outline control points. |
-| Vigour | `V*` | polygenic block (6) | `+` / `−` | additive | Internode length and total growth ticks → reaching vs compact. |
-| Droop | `G*` | polygenic block (6) | `+` / `−` | additive | Gravitropism weight → weeping vs upright. Reads as behaviour *while growing*. |
-| Branchiness | `B*` | polygenic block (6) | `+` / `−` | additive | Branch probability per tick. |
+| Locus         | Symbol | Kind                | Alleles                                                 | Inheritance            | Effect                                                                                              |
+| ------------- | ------ | ------------------- | ------------------------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------- |
+| Pigment block | `W`    | discrete            | `W` (block), `w` (permit)                               | `W` dominant           | `W_` → no anthocyanin; flower reads white/cream **regardless of hue loci**. `ww` → hue expressed.   |
+| Hue A         | `H1`   | discrete, dosage    | `H1`, `h1`                                              | additive dosage        | Contributes to hue class.                                                                           |
+| Hue B         | `H2`   | discrete, dosage    | `H2`, `h2`                                              | additive dosage        | Contributes to hue class.                                                                           |
+| Doubling      | `D`    | discrete            | `D` (single), `d` (double)                              | `d` recessive          | `dd` → stamens convert to petals (ABC-model behaviour): petal count multiplies, stamen ring absent. |
+| Petal shape   | `P`    | allele series       | `P^f` frilled > `P^l` lobed > `P^p` pointed > `p` round | hierarchical dominance | Selects the petal outline control points.                                                           |
+| Vigour        | `V*`   | polygenic block (6) | `+` / `−`                                               | additive               | Internode length and total growth ticks → reaching vs compact.                                      |
+| Droop         | `G*`   | polygenic block (6) | `+` / `−`                                               | additive               | Gravitropism weight → weeping vs upright. Reads as behaviour _while growing_.                       |
+| Branchiness   | `B*`   | polygenic block (6) | `+` / `−`                                               | additive               | Branch probability per tick.                                                                        |
 
 This yields four distinct surprise types from eight loci:
 
@@ -130,7 +130,7 @@ This yields four distinct surprise types from eight loci:
 4. **Continuous drift** — the three polygenic blocks move habit gradually across generations.
 
 Hue is deliberately **discrete (five classes)** rather than continuous: discrete classes make
-Mendelian inheritance *visible*, which is the entire point of choosing a two-layer gene model. A
+Mendelian inheritance _visible_, which is the entire point of choosing a two-layer gene model. A
 continuous hue would smear segregation into indistinguishable near-misses.
 
 ## 6. Growth simulation
@@ -140,7 +140,7 @@ A tip carries `{ pos, dir, width, age, depth, vigourLeft }`. Per tick, for each 
 1. **Step** — advance `pos` along `dir` by a step length scaled from vigour and depth.
 2. **Tropisms** — rotate `dir` by the weighted sum of gravitropism (toward down), phototropism
    (toward the light direction), and a stiffness term that damps change. Weights come from the
-   phenotype, so a lineage's *habit* is genetic.
+   phenotype, so a lineage's _habit_ is genetic.
 3. **Taper** — multiply `width` by the taper factor.
 4. **Branch** — with the phenotype's branch probability (attenuated by depth), spawn a child tip at
    ±`branchAngle` with reduced width and `depth + 1`.
@@ -172,9 +172,8 @@ deliberately outside the genome-determined structure.
 ## 8. Milestones
 
 1. **Spike — render and judge the real growth engine.** Hard-coded phenotypes → grown plants →
-   inspect actual output and iterate art direction against it. **Gate: an independent visual critic
-   pass**, because builder-bias on rendered output is a perception failure that self-review does not
-   catch (project precedent; see §1). Nothing further is built until this looks good.
+   inspect actual output and iterate art direction against it. **DONE; the critic gate was retired
+   on 2026-07-30 — see §13.** Leaves were pulled into this milestone on 2026-07-29.
 2. **Genome logic, TDD** — `loci`, `genome`, `inherit`, `mutate`, `express`, `serialize`. Pure, no
    rendering.
 3. **Wiring** — genes → growth; garden plots; the four verbs.
@@ -198,7 +197,7 @@ Then a Playwright canvas-hash smoke test to catch render regressions.
 Two controls are mandatory, per the project's real-execution doctrine:
 
 - The segregation test must first be **run against a deliberately broken `inherit`** (e.g. one that
-  always takes parent A's allele) and confirmed to fail *for the stated reason*. A test never seen
+  always takes parent A's allele) and confirmed to fail _for the stated reason_. A test never seen
   failing is not evidence.
 - The epistasis test carries a **positive control** asserting that coloured × coloured still yields
   colour, inside the same test. Otherwise a broken harness that produces white unconditionally would
@@ -218,9 +217,69 @@ port of `~/flower`.
 
 ## 12. Known risks
 
-- **Tropism tuning.** Agent growth is not guaranteed to produce *pretty* plants; it needs tuning.
+- **Tropism tuning.** Agent growth is not guaranteed to produce _pretty_ plants; it needs tuning.
   Milestone 1 exists to discover this early rather than after the game is wired.
 - **Gene-set size.** Eight loci may prove too few to keep breeding interesting for long. Cheap to
   extend, so starting small is the right bet.
 - **Background muddiness.** Many accumulated layers could converge to grey soup. Mitigation:
   colour-mix each retirement toward a single background hue and cap the number of composited layers.
+
+## 13. Milestone 1 outcome — and why the critic gate was retired
+
+**Status: Milestone 1 complete. The five-criterion critic gate is RETIRED and must not be
+reinstated without the user's explicit say-so.**
+
+### What happened
+
+Four independent critic rounds were run (reports in the job tmp dir, summarised below). All
+four returned **0 of 5 criteria PASS**. Each round nonetheless found real, pixel-measured
+defects, and each was fixed at its cause:
+
+| Round | Headline defect | Fix |
+| --- | --- | --- |
+| 1 | Petals were rounded squares in a pinwheel — measured aspect **1.05** | Obovate profile; width set as a fraction of length |
+| 2 | `lobed` petals were axis-aligned stair-steps detached from the receptacle | Amplitude envelope fading to zero at base and apex; 96 samples |
+| 3 | "No ink contour on anything" | Traced to a **contradiction in the art direction**: dark ink on a near-black ground is invisible by construction. The contour was rendering at 1px and could not be seen |
+| 4 | Light rim "reads as glow, not linework" | The 1px rim was drowned by an 18–27px halo whose area equalled the whole drawn plant |
+
+### Why it was retired
+
+The user retired the gate on 2026-07-30, unconvinced it was working. On inspection that was
+correct, and the provenance is the reason:
+
+- The **idea** of an independent visual critic comes from the user's own doctrine
+  (`CLAUDE.md`, `feedback_independent_critic_gate.md`) and remains sound.
+- The **five criteria did not.** They were authored in the implementation plan
+  (`2026-07-29-heirloom-m1-growth-spike.md:1542-1546`) by the same agent doing the work, and
+  were never reviewed by the user — the spec's own bar was only the phrase "until this looks
+  good".
+- They were **tightened mid-loop, against the work**: "terminating into the ground" was added
+  to criterion 2 during round 3, and "does every bloom have a visible centre" to criterion 3
+  during round 4. Both became FAIL reasons in the very round they were introduced.
+- They are **all-or-nothing across twelve panels**, so one bad panel zeroes a criterion. At the
+  final 0/5, 7 of 12 panels read as plants and 7 of 11 axes passed — the score did not track
+  the state of the work.
+
+**Lesson for later milestones:** an independent critic is valuable for *finding* defects in
+rendered output and should keep being used that way. It is not valuable as a pass/fail gate
+when the rubric is self-authored, unreviewed, and mutable. Judge with the critic; decide with
+the user.
+
+### Final state of the spike
+
+Twelve phenotype panels, one shared seed, exactly one parameter varied per panel. Contour
+lines are chosen by **contrast with their own fill** (light rim on mid-tone fills, dark rim on
+the pale white morph — a fixed-lightness rim provably cannot draw both). Glow radius and alpha
+cut hard so linework survives. Occluded blooms are culled, which fixed centre "bead chains" and
+opened the canopy so branch geometry reads. Ground is an irregular lit crest, not a flat bar.
+73 tests; `tsc --noEmit` clean on TypeScript 7.
+
+### Known residual defects (backlog, not blockers)
+
+1. Stem outline jitters — width oscillates up to ±33% of local width between adjacent rows,
+   because outlines are built per-tick rather than as one continuous smoothed path.
+2. Back-row petals inside a dense bloom still read as rounded quadrilaterals.
+3. Petal fills are flat — no intra-petal shading, so a single bloom has limited depth.
+4. Foliage is sparse relative to flower area, and leaf blades are identical stamps.
+5. Colour is vivid rather than muted-saturated; hue variants hold identical S and V, so `blue`
+   reads slightly electric.

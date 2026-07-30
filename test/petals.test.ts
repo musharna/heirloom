@@ -71,29 +71,46 @@ describe("petalPath", () => {
     expect(nearTip("pointed")).toBeLessThan(nearTip("round"));
   });
 
-  it("changes petal AREA enough per allele to be visible at render scale", () => {
-    // Measured failure this guards: lobed and frilled changed total petal area by 0.5% and
-    // 2.3% against baseline, so both were invisible at the size the game renders and only
-    // resolved above 5x zoom. A gene the player cannot see is not a gene.
-    const area = (s: PetalShape): number => {
+  it("makes every allele differ from round in proportion OR margin texture", () => {
+    // Guards the measured failure that lobed and frilled were invisible at render scale.
+    //
+    // AREA ALONE IS THE WRONG METRIC, and this test used to use it. Profiles are normalised
+    // by their own peak, so adding margin waviness raises the peak and shrinks mean width,
+    // cancelling the change: lobed measured 134.5 against round's 135.0 — a 0.4% area delta
+    // — while its perimeter was 6.5% longer. Margin texture lives in PERIMETER. The shape
+    // factor (perimeter / sqrt(area)) is dimensionless and captures both.
+    const metrics = (s: PetalShape): { area: number; shapeFactor: number } => {
       const pts = petalPath(spec(s));
       let a = 0;
+      let per = 0;
       for (let i = 0; i < pts.length; i++) {
         const p = pts[i]!;
         const q = pts[(i + 1) % pts.length]!;
         a += p.x * q.y - q.x * p.y;
+        per += Math.hypot(q.x - p.x, q.y - p.y);
       }
-      return Math.abs(a) / 2;
+      a = Math.abs(a) / 2;
+      return { area: a, shapeFactor: per / Math.sqrt(a) };
     };
-    const base = area("round");
+
+    const base = metrics("round");
     for (const s of ["pointed", "lobed", "frilled"] as PetalShape[]) {
-      const delta = Math.abs(area(s) - base) / base;
-      expect(delta).toBeGreaterThan(0.08);
+      const m = metrics(s);
+      const dArea = Math.abs(m.area - base.area) / base.area;
+      const dShape =
+        Math.abs(m.shapeFactor - base.shapeFactor) / base.shapeFactor;
+      // Either proportion or margin texture must move materially.
+      expect(Math.max(dArea, dShape)).toBeGreaterThan(0.06);
     }
-    // And lobed must differ from frilled, or shipping both is pointless.
-    expect(Math.abs(area("lobed") - area("frilled")) / base).toBeGreaterThan(
-      0.06,
+
+    // And lobed must differ from frilled, or shipping both alleles is pointless.
+    const l = metrics("lobed");
+    const f = metrics("frilled");
+    const between = Math.max(
+      Math.abs(l.area - f.area) / base.area,
+      Math.abs(l.shapeFactor - f.shapeFactor) / base.shapeFactor,
     );
+    expect(between).toBeGreaterThan(0.06);
   });
 
   it("makes the four shape alleles geometrically distinct", () => {

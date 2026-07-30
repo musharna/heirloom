@@ -1535,7 +1535,18 @@ Expected: `shots/lookdev.png` exists, and the console shows no `[pageerror]`. A 
 
 Open `shots/lookdev.png` and write down what is actually wrong with it. Lead with defects, not with what works. Fix anything unambiguous (blank panels, plants growing off-canvas, blooms detached from stem tips, stems rendering as hard-edged polygons) and re-shoot before Step 6.
 
-- [ ] **Step 6: Dispatch an independent visual critic**
+- [x] **Step 6: Dispatch an independent visual critic**
+
+> **RETIRED 2026-07-30 — DO NOT RE-ENTER THIS LOOP.** Four rounds ran and all returned 0/5.
+> The criteria below were written by the implementing agent, were never reviewed by the user,
+> were tightened mid-loop against the work, and are all-or-nothing across twelve panels — at
+> the final 0/5, 7 of 12 panels read as plants and 7 of 11 axes passed, so the score did not
+> track the state of the work. The user retired the gate. Full account and the residual
+> defect backlog: **spec §13**.
+>
+> Keep using a fresh critic to FIND defects in rendered output — that part worked, and it
+> caught real measured bugs every round. Do not use a self-authored rubric as a pass/fail
+> gate. Judge with the critic; decide with the user.
 
 Builder-bias on rendered output is a perception failure that self-review does not correct, so this gate requires a _fresh_ agent that did not write the code. Dispatch a general-purpose subagent (opus; this is a judgment task, not a mechanical one) with `shots/lookdev.png` and exactly these pass criteria:
 

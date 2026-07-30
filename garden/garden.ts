@@ -16,7 +16,8 @@ import {
   traySlot,
 } from "../src/game/hit";
 import type { Genome } from "../src/genome/genome";
-import { serialize } from "../src/genome/serialize";
+import { genomeSeed, serialize } from "../src/genome/serialize";
+import { Forest } from "../src/render/accumulate";
 import { mulberry32 } from "../src/rng";
 import {
   PALETTE,
@@ -72,6 +73,16 @@ let garden: Garden = sowFounders(
 let now = 0;
 
 /**
+ * The accumulating background. Everything ever displaced from a plot lives here as pixels.
+ *
+ * `composited` tracks how many of `garden.retired` have been drawn. Comparing counts each
+ * frame — rather than compositing inside the pointer handler — means every path that retires
+ * a plant is covered automatically, including any future one.
+ */
+const forest = new Forest(W, H, dpr);
+let composited = 0;
+
+/**
  * What the pointer is currently carrying.
  *
  * A bloom drag doubles as a click: which verb fires is decided on RELEASE, by how far the
@@ -89,6 +100,8 @@ let pointer: Vec2 = { x: -1, y: -1 };
 let flash: { at: Vec2; until: number } | null = null;
 
 const CLICK_SLOP = 7;
+/** How long the "something happened" ring lives, in ticks. */
+const FLASH_TICKS = 34;
 
 function toCanvas(e: PointerEvent): Vec2 {
   const r = canvas.getBoundingClientRect();
@@ -136,11 +149,11 @@ canvas.addEventListener("pointerup", (e) => {
       // CROSS — two different plants.
       const partner = garden.plots[onto.plotIndex]!.occupant!.genome;
       garden = addSeed(garden, crossOf(d.genome, partner, rand));
-      flash = { at: p, until: now + 34 };
+      flash = { at: p, until: now + FLASH_TICKS };
     } else if (travelled < CLICK_SLOP) {
       // CLONE — a click that never became a drag.
       garden = addSeed(garden, cloneOf(d.genome, rand));
-      flash = { at: p, until: now + 34 };
+      flash = { at: p, until: now + FLASH_TICKS };
     }
     return;
   }
@@ -149,7 +162,7 @@ canvas.addEventListener("pointerup", (e) => {
   const onto = seedAt(garden, p, W, H);
   if (onto !== null && onto !== d.id) {
     garden = spliceSeeds(garden, d.id, onto, rand);
-    flash = { at: p, until: now + 34 };
+    flash = { at: p, until: now + FLASH_TICKS };
     return;
   }
   const plot = plotAt(garden, p);
@@ -157,7 +170,7 @@ canvas.addEventListener("pointerup", (e) => {
   // rearranging, not planting, and every x in the bed is within some plot's reach.
   if (plot !== null && p.y < SOIL + 24) {
     garden = plantSeed(garden, d.id, plot, SOIL, now);
-    flash = { at: { x: plotXs[plot]!, y: SOIL }, until: now + 34 };
+    flash = { at: { x: plotXs[plot]!, y: SOIL }, until: now + FLASH_TICKS };
   }
 });
 
@@ -211,7 +224,16 @@ function dropTarget(): number | null {
 }
 
 function frame(): void {
+  // Composite anything newly retired before drawing, so a replaced plant appears in the
+  // background on the same frame it leaves the bed rather than blinking out of existence.
+  while (composited < garden.retired.length) {
+    const gone = garden.retired[composited]!;
+    forest.retire(gone.plant, genomeSeed(gone.genome));
+    composited++;
+  }
+
   paintStage(ctx, W, H, SOIL);
+  forest.draw(ctx);
 
   for (const plot of garden.plots) {
     if (plot.occupant)
@@ -270,7 +292,11 @@ function frame(): void {
   }
 
   if (flash && now < flash.until) {
-    const k = (flash.until - now) / 34;
+    // Clamped. `now < flash.until` bounds k BELOW but not above, so a clock that jumps
+    // backwards gives k > 1.29 and an arc radius of -44 — which throws, and a throw inside
+    // the rAF callback stops the loop being rescheduled, freezing the entire game with no
+    // visible cause. One unclamped interpolation took the whole render loop down.
+    const k = Math.min(1, Math.max(0, (flash.until - now) / FLASH_TICKS));
     paintHalo(flash.at, 10 + 34 * (1 - k), 0.55 * k);
   }
 
@@ -316,6 +342,11 @@ Object.assign(window as unknown as Record<string, unknown>, {
     planted: garden.plots.filter((p) => p.occupant).length,
     retired: garden.retired.length,
     empty: garden.plots.findIndex((p) => !p.occupant),
+    occupied: garden.plots
+      .map((p, i) => (p.occupant ? i : -1))
+      .filter((i) => i >= 0),
+    forestDepth: forest.depth,
+    forestCoverage: forest.coverage(),
   }),
   /** Canvas-space centres of every flower currently on screen. */
   __blooms: () =>

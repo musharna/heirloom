@@ -178,7 +178,7 @@ deliberately outside the genome-determined structure.
    rendering. **DONE 2026-07-30 — see §14.**
 3. **Wiring** — genes → growth; garden plots; the four verbs. **DONE 2026-07-30 — see §15.**
    grows from `express(genome)` seeded by `genomeSeed(genome)`. The four verbs are not built._
-4. **Accumulation** — retirement, background compositing, depth-of-field.
+4. **Accumulation** — retirement, background compositing, depth-of-field. **DONE 2026-07-30 — see §16.**
 5. **Sharing and persistence** — URL round-trip, localStorage.
 
 Milestone 1 first is not incidental: it front-loads the only risk that can invalidate the whole
@@ -373,3 +373,49 @@ mutating, always.
 
 Retired genomes accumulate in `garden.retired` and are never drawn — that is Milestone 4. Nothing
 persists across a reload, and the share codes are shown but not yet in the URL (Milestone 5).
+
+## 16. Milestone 4 outcome — the accumulating forest
+
+Built 2026-07-30. 163 tests, `tsc --noEmit` clean. Files: `src/render/{forest,accumulate}.ts`.
+
+A plant displaced from a plot is composited ONCE into an offscreen buffer and then exists only
+as pixels — the original's `bitmapData` trick. Keeping retired plants as live objects would mean
+re-rendering thousands of stroke outlines every frame after an hour of play; here the entire
+history costs one `drawImage` regardless of its size. The trade is that a composited plant can
+never change again, which is exactly what "retired" means.
+
+**Depth without a z-order.** Each retirement washes the whole buffer once toward the ground
+colour (`source-atop`, so only existing pixels are touched) and then draws itself at full
+strength on top. Depth then falls out of how many retirements have happened since — one
+`fillRect` instead of N re-draws, and "older flowers fade into the background" is the literal
+implementation rather than a simulation of it.
+
+Placement is derived from the genome hash, never `Math.random()`: §7 regenerates the background
+from a replay list on load, and random placement would reshuffle the player's entire history on
+every reload.
+
+### The visual set the numbers, not the other way round
+
+The first placement ranges (alpha 0.58–0.78, scale 0.78–0.94) passed every test in the file and
+produced a background that competed with the foreground — the live bed stopped being the subject
+of its own picture. Nothing in the suite was measuring *does it recede*, only *does it vary*, and
+variation is not depth. Ranges are now alpha 0.28–0.50, scale 0.64–0.82, blur 1.1–3.0, with an
+explicit subordination test so a later tweak cannot quietly undo it.
+
+### One unclamped interpolation killed the whole game
+
+The flash ring computed `radius = 10 + 34 * (1 - k)` with `k = (until - now) / 34`. The guard
+`now < until` bounds `k` below but **not above**, so a clock moving backwards gave `k > 1.29` and
+a radius of −44. `arc()` throws on a negative radius — and a throw inside the `requestAnimationFrame`
+callback means the loop is never rescheduled, so the entire game froze with a blank-looking canvas
+and no visible cause. It also masked the forest bug being investigated at the time: compositing
+happens in `frame()`, so with the loop dead only one plant ever reached the buffer, which read as
+"accumulation is broken" rather than "rendering is dead".
+
+Two lessons: **clamp every interpolation regardless of what the surrounding guard seems to
+guarantee**, and a rAF loop is a single point of failure for everything drawn.
+
+### Deferred
+
+Nothing persists across a reload, and the share codes are displayed but not in the URL. That is
+Milestone 5, the last one.

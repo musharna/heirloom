@@ -147,7 +147,10 @@ describe("plant — the drop verb", () => {
     const displaced = g.plots[1]!.occupant!.genome;
     g = plantSeed(g, second, 1, SOIL, 50);
     expect(g.retired).toHaveLength(1);
-    expect(genomesEqual(g.retired[0]!, displaced)).toBe(true);
+    expect(genomesEqual(g.retired[0]!.genome, displaced)).toBe(true);
+    // The grown plant travels with it: the background composites pixels, so a genome alone
+    // would have to be re-expressed and re-grown before anything could be drawn.
+    expect(g.retired[0]!.plant.segments.length).toBeGreaterThan(0);
     expect(genomesEqual(g.plots[1]!.occupant!.genome, displaced)).toBe(false);
   });
 

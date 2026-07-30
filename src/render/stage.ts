@@ -146,6 +146,7 @@ export function paintStage(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
+  soilTop?: number,
 ): void {
   ctx.fillStyle = PALETTE.ground;
   ctx.fillRect(0, 0, w, h);
@@ -162,23 +163,26 @@ export function paintStage(
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, w, h);
 
-  paintSoil(ctx, w, h);
+  paintSoil(ctx, w, h, soilTop);
 }
 
 /**
  * The soil band. Called by paintStage, and called AGAIN after the plant so the stem's flat
  * base is buried in the ground rather than stopping 2px above it in open air.
+ *
+ * `soilTop` overrides the default line. The garden needs a deep band with room for the seed
+ * tray to rest ON the dirt; the lookdev sheet wants the thin default.
  */
 export function paintSoil(
   ctx: CanvasRenderingContext2D,
   w: number,
   h: number,
+  soilTop = soilLine(h),
 ): void {
   // An UNEVEN soil surface, and a taller one. A flat full-width rectangle with a straight
   // top edge was read as a caption strip rather than as ground — correctly, since that is
   // exactly what it looked like. An irregular crest plus a lit rim along it makes it a
   // surface the plant sits on.
-  const soilTop = soilLine(h);
   const crest = (x: number): number =>
     soilTop +
     2.6 * Math.sin(x * 0.055) +

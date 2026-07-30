@@ -29,6 +29,8 @@ export const PALETTE = {
   stemHi: "#557a5f",
   stemRim: "rgba(196,224,201,0.55)",
   soil: "#1c2021",
+  /** Bottom of the soil gradient — earth falls off with depth rather than reading as a slab. */
+  soilDeep: "#101315",
   soilRim: "rgba(150,170,152,0.34)",
   stamen: "#e8c35a",
   leaf: "#35543d",
@@ -195,7 +197,15 @@ export function paintSoil(
   for (let x = 1; x <= w; x++) ctx.lineTo(x, crest(x));
   ctx.lineTo(w, h);
   ctx.closePath();
-  ctx.fillStyle = PALETTE.soil;
+  // A vertical gradient, not a flat fill. A thin band gets away with one colour; the deep
+  // band the garden needs (to seat the seed tray on the dirt) read as a grey slab across the
+  // bottom quarter of the frame — the same "this looks like a caption strip" failure the
+  // irregular crest was introduced to fix, returning as soon as the band got tall. Falling
+  // off toward the bottom reads as depth of earth instead of as a rectangle.
+  const grad = ctx.createLinearGradient(0, soilTop, 0, h);
+  grad.addColorStop(0, PALETTE.soil);
+  grad.addColorStop(1, PALETTE.soilDeep);
+  ctx.fillStyle = grad;
   ctx.fill();
 
   // Lit crest line: the ground gets the same light-rim treatment as the plant, so it reads

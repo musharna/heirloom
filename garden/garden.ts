@@ -27,12 +27,22 @@ import {
 import type { Vec2 } from "../src/types";
 
 const W = 1180;
-const H = 560;
-/** Deep enough that the tray rests ON the dirt rather than floating below the frame. */
-const SOIL = 452;
+/**
+ * Sized to what the plants actually occupy, not to a round number. At 520 with the soil at
+ * 440 the tallest founder topped out around 40% of the frame and the upper 60% was empty
+ * sky — the growth engine's plants are roughly 250px tall, so the headroom above them was
+ * larger than the plants themselves.
+ */
+const H = 470;
+/**
+ * Deep enough that the tray rests ON the dirt rather than floating below the frame, shallow
+ * enough that the band does not become a slab. At 108px it read as a caption strip; the
+ * gradient in paintSoil does the rest of the work.
+ */
+const SOIL = 390;
 const PLOTS = 6;
-/** Founders occupy half the bed. The empty plots are the invitation to plant something. */
-const FOUNDERS = 3;
+/** Two thirds sown. The empty plots are the invitation to plant something. */
+const FOUNDERS = 4;
 /** Ticks per frame. Unhurried without being tedious. */
 const SPEED = 1.4;
 
@@ -157,10 +167,17 @@ canvas.addEventListener("pointerleave", () => {
 
 function paintPlotMarker(x: number): void {
   // A shallow divot: enough to read as "something could go here", not enough to look like UI.
+  // Drawn as a dark hollow with a lit lower lip — the same trick the soil crest uses. A bare
+  // outline at 0.22 alpha was technically present and effectively invisible against the
+  // band, which is the identical mistake the stem contour made against the dark ground.
   ctx.beginPath();
-  ctx.ellipse(x, SOIL + 7, 15, 4.2, 0, 0, Math.PI * 2);
-  ctx.strokeStyle = "rgba(150,170,152,0.22)";
-  ctx.lineWidth = 1;
+  ctx.ellipse(x, SOIL + 9, 16, 4.6, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0,0,0,0.32)";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(x, SOIL + 9, 16, 4.6, 0, 0.15 * Math.PI, 0.85 * Math.PI);
+  ctx.strokeStyle = "rgba(168,190,170,0.42)";
+  ctx.lineWidth = 1.1;
   ctx.stroke();
 }
 
@@ -174,25 +191,40 @@ function paintSeed(x: number, y: number, lit: boolean): void {
   ctx.stroke();
 }
 
-function paintHalo(at: Vec2, r: number, alpha: number): void {
+const RING_PLANT = "232,246,234";
+/** Amber: this drop REPLACES a living plant. */
+const RING_REPLACE = "236,196,116";
+
+function paintHalo(at: Vec2, r: number, alpha: number, rgb = RING_PLANT): void {
   ctx.beginPath();
   ctx.arc(at.x, at.y, r, 0, Math.PI * 2);
-  ctx.strokeStyle = `rgba(232,246,234,${alpha})`;
+  ctx.strokeStyle = `rgba(${rgb},${alpha})`;
   ctx.lineWidth = 1.4;
   ctx.stroke();
+}
+
+/** The plot a seed drag would land in, or null. Shared by the ring and the hint text. */
+function dropTarget(): number | null {
+  if (drag?.kind !== "seed") return null;
+  const plot = plotAt(garden, pointer);
+  return plot !== null && pointer.y < SOIL + 24 ? plot : null;
 }
 
 function frame(): void {
   paintStage(ctx, W, H, SOIL);
 
-  for (const [i, plot] of garden.plots.entries()) {
-    if (!plot.occupant) paintPlotMarker(plotXs[i]!);
-  }
   for (const plot of garden.plots) {
     if (plot.occupant)
       paintPlant(ctx, plot.occupant.plant, now - plot.occupant.plantedAt);
   }
   paintSoil(ctx, W, H, SOIL);
+
+  // AFTER the soil, not before. Drawn first, every divot was painted over by the soil band
+  // and the empty plots looked identical to bare ground — so the one affordance telling the
+  // player where a seed can go was invisible.
+  for (const [i, plot] of garden.plots.entries()) {
+    if (!plot.occupant) paintPlotMarker(plotXs[i]!);
+  }
 
   // Affordance: ring whatever the pointer could act on right now.
   const hover = drag ? null : bloomAt(garden, pointer, now);
@@ -219,10 +251,17 @@ function frame(): void {
 
     if (drag.kind === "seed") {
       paintSeed(pointer.x, pointer.y, true);
-      // Show which plot would receive it, so a drop is never a guess.
-      const plot = plotAt(garden, pointer);
-      if (plot !== null && pointer.y < SOIL + 24)
-        paintHalo({ x: plotXs[plot]!, y: SOIL + 6 }, 20, 0.6);
+      // Show which plot would receive it, so a drop is never a guess — and in WHICH colour,
+      // because dropping onto an occupied plot destroys a living plant. An identical ring for
+      // both made the one destructive verb in the game indistinguishable from the safe one.
+      const plot = dropTarget();
+      if (plot !== null)
+        paintHalo(
+          { x: plotXs[plot]!, y: SOIL + 6 },
+          20,
+          0.65,
+          garden.plots[plot]!.occupant ? RING_REPLACE : RING_PLANT,
+        );
     } else {
       const onto = bloomAt(garden, pointer, now);
       if (onto && onto.plotIndex !== drag.plotIndex)
@@ -245,7 +284,12 @@ function frame(): void {
 }
 
 function hint(): string {
-  if (drag?.kind === "seed") return "drop it on a plot to plant it";
+  if (drag?.kind === "seed") {
+    const plot = dropTarget();
+    if (plot !== null && garden.plots[plot]!.occupant)
+      return "drop here to REPLACE the plant growing in this plot";
+    return "drop it on a plot to plant it";
+  }
   if (drag?.kind === "bloom") return "drop it on another flower to cross them";
   if (garden.tray.length === 0)
     return "click a flower for a seed · drag one flower onto another to cross";

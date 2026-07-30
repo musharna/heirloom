@@ -177,7 +177,7 @@ deliberately outside the genome-determined structure.
 2. **Genome logic, TDD** — `loci`, `genome`, `inherit`, `mutate`, `express`, `serialize`. Pure, no
    rendering. **DONE 2026-07-30 — see §14.**
 3. **Wiring** — genes → growth; garden plots; the four verbs. **DONE 2026-07-30 — see §15.**
-   grows from `express(genome)` seeded by `genomeSeed(genome)`. The four verbs are not built._
+   grows from `express(genome)` seeded by `genomeSeed(genome)`. The four verbs are not built.\_
 4. **Accumulation** — retirement, background compositing, depth-of-field. **DONE 2026-07-30 — see §16.**
 5. **Sharing and persistence** — URL round-trip, localStorage. **DONE 2026-07-30 — see §17.**
 
@@ -401,7 +401,7 @@ every reload.
 
 The first placement ranges (alpha 0.58–0.78, scale 0.78–0.94) passed every test in the file and
 produced a background that competed with the foreground — the live bed stopped being the subject
-of its own picture. Nothing in the suite was measuring *does it recede*, only *does it vary*, and
+of its own picture. Nothing in the suite was measuring _does it recede_, only _does it vary_, and
 variation is not depth. Ranges are now alpha 0.28–0.50, scale 0.64–0.82, blur 1.1–3.0, with an
 explicit subordination test so a later tweak cannot quietly undo it.
 
@@ -477,6 +477,9 @@ series, dosage and epistasis, in place of averaged numbers.
 Residual visual backlog remains as recorded in §13 — stem outline jitter, back-row petal shape,
 sparse and identical leaf stamps, and colour that is vivid rather than muted-saturated.
 
+> **Superseded.** §19 re-measured this backlog and retracted two of its five entries as
+> already-fixed; §20 records the responsive-layout work that followed. Read those first.
+
 ## 19. Visual pass — and a retracted backlog
 
 Done 2026-07-30. 183 tests, `tsc --noEmit` clean, all three drivers pass.
@@ -530,3 +533,69 @@ said contrast decides; it just never measured it.
 
 Found by extending the rim test to sweep all five hue classes instead of the default one — the
 single-hue sweep left four fills unchecked.
+
+## 20. Responsive layout — the world adapts to the viewport
+
+Done 2026-07-30. 200 tests, `tsc --noEmit` clean, all four drivers pass, deployed and verified
+live.
+
+The world had been three constants: 1180 x 470 with soil at 390, and six plot positions hand-set
+at 135/317/499/681/863/1045. That is correct for exactly one screen. After the aspect fix a phone
+got the same world scaled down undistorted — a 396x158 strip, legible but not playable.
+
+`src/game/layout.ts` now derives all of it from the viewport, pure and DOM-free so the whole rule
+is testable:
+
+| viewport                | world    | plots |
+| ----------------------- | -------- | ----- |
+| desktop 1440x900        | 1180x470 | 6     |
+| phone landscape 863x360 | 847x430  | 4     |
+| phone portrait 412x839  | 396x470  | 2     |
+
+The desktop row reproduces the hand-tuned positions exactly, which is the point — a
+generalisation that silently changes the number it was generalising FROM is a regression dressed
+up as a refactor.
+
+**Height is clamped to a narrow band (430–470) while width is not.** A plant is ~250px tall
+whatever the screen is, so height is not a free parameter: below 430 the canopy runs out of
+headroom, above 470 the extra is empty sky. A tall portrait phone gets letterboxing rather than a
+taller world, because a taller world is just more darkness.
+
+### Rotation is a reshape, not a rescale
+
+A phone rotated to landscape has room for four plots where portrait had two. Rotating back has to
+put two plants somewhere. `relayout()` retires the surplus into the background — the same fate as
+any plant the player replaces — rather than deleting them, and re-grows each retired plant at a
+clamped x before compositing so landscape geometry never lands in a portrait buffer. The
+background buffer is rebuilt from the replay log at the new size.
+
+### Three bugs the existing tests could not see
+
+- **`placeRetired` scattered a fixed ±170px** — 29% of a 1180-wide desktop world, but 86% of a
+  396-wide phone world. Retired plants were flung clean off the canvas: the background came back
+  `depth 1, coverage 0`, layers composited and drawn nowhere. Every existing forest test passed,
+  because they all ran at the default world width. Scatter is now a fraction of world width.
+- **Surplus plants carried landscape geometry into a portrait world**, yielding 157 covered
+  pixels where a correct rebuild gives tens of thousands.
+- **The rotation check was vacuous.** With one plant and 4→2 plots the surplus assertion read
+  `0 >= -1` and passed on any implementation, including one that deletes plants outright. The
+  driver now fills the landscape bed first, so surplus > 0 and the number means something.
+
+### The coverage threshold had to be scale-free
+
+A first `coverage > 1000` floor sat _inside_ the legitimate range: measured correct runs gave 826,
+23,816 and 34,849 depending on which genomes happened to retire — a compact droopy plant at
+depth 1 covers two orders of magnitude fewer pixels than a large bush. The buggy run gave 157. The
+floor is now 0.05% of the buffer's own pixel area, which separates those populations with margin
+and survives a change of world size.
+
+### A mutation test that reverted an uncommitted file
+
+Twice. `git checkout -- <file>` discarded an entire uncommitted rewrite the first time; the second
+time it was a silent no-op on an _untracked_ file, so four mutations accumulated and the harness
+scored a file that no longer resembled the one under test. Both were invisible because
+`grep -c '^FAIL'` returns 0 for a crash exactly as it does for a pass.
+
+The rules that came out of it: **commit before mutating**, verify each revert with
+`git diff --quiet`, and require a sentinel line proving the harness actually RAN before trusting
+any "0 failures" count. All five layout mutants were killed once the harness was real.

@@ -17,6 +17,9 @@ const BASE: Genome = {
   H2: ["h2", "h2"],
   D: ["D", "D"],
   P: ["p", "p"],
+  I: ["i", "i"],
+  N: ["n", "n"],
+  L: ["L", "L"],
   V: poly(0, 0),
   G: poly(0, 0),
   B: poly(0, 0),
@@ -197,10 +200,33 @@ describe("express", () => {
       expect(p.taper).toBeLessThan(1); // >= 1 would never terminate a shoot
       expect(p.baseWidth).toBeGreaterThan(5);
       expect(p.baseWidth).toBeLessThan(14);
-      expect(p.bloomRadius).toBeGreaterThan(12);
+      // The floor is per-ARCHITECTURE now. A solitary flower still has to stay in the band
+      // milestone 1 tuned; a clustered one is deliberately smaller, and holding it to the
+      // solitary floor would have meant either failing this test or giving up the size trade
+      // that stops "twelve big flowers per shoot" from being strictly the best genotype.
+      //
+      // The clustered floor is not slack: below about 8px a five-petalled floret is fewer
+      // pixels than its own outline and the whole head reads as a smudge.
+      expect(p.bloomRadius).toBeGreaterThan(
+        p.inflorescence === "solitary" ? 12 : 8,
+      );
       expect(p.bloomRadius).toBeLessThan(30);
       expect(p.branchWidthRatio).toBeGreaterThan(0.5);
       expect(p.branchWidthRatio).toBeLessThan(1);
     }
+  });
+
+  it("CONTROL: a solitary flower still lands in the milestone-1 band", () => {
+    // Pins that the branch above discriminates. If the size trade were ever applied to
+    // solitary flowers too, the assertion would go slack and nothing else would notice.
+    const rand = mulberry32(31);
+    let seen = 0;
+    for (let i = 0; i < 800; i++) {
+      const p = express(randomGenome(rand));
+      if (p.inflorescence !== "solitary") continue;
+      seen++;
+      expect(p.bloomRadius).toBeGreaterThan(12);
+    }
+    expect(seen).toBeGreaterThan(50);
   });
 });

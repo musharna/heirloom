@@ -19,6 +19,9 @@ const SINGLE: Phenotype = {
   hueClass: 2,
   white: false,
   bloomRadius: 14,
+  petalCount: 5,
+  inflorescence: "solitary",
+  viable: true,
 };
 const DOUBLE: Phenotype = { ...SINGLE, doubled: true };
 const c = { x: 0, y: 0 };

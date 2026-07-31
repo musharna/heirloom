@@ -3,6 +3,9 @@ import {
   D_ALLELES,
   H1_ALLELES,
   H2_ALLELES,
+  I_ALLELES,
+  L_ALLELES,
+  N_ALLELES,
   POLY_LOCI,
   P_ALLELES,
   W_ALLELES,
@@ -10,10 +13,14 @@ import {
 import type { Genome, PolyBlock } from "./genome";
 
 /** Bumped whenever the bit layout changes. An old link then fails loudly instead of decoding to nonsense. */
-export const GENOME_VERSION = 1;
+export const GENOME_VERSION = 2;
 
-const PAYLOAD_BYTES = 6; // 48 bits: see writeGenome
+const PAYLOAD_BYTES = 8; // 58 used of 64: see serialize
 const TOTAL_BYTES = 1 + PAYLOAD_BYTES + 1; // version + payload + checksum
+
+/** The v1 layout, kept only so old links and saves still open. See `readV1`. */
+const V1_PAYLOAD_BYTES = 6;
+const V1_TOTAL_BYTES = 1 + V1_PAYLOAD_BYTES + 1;
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 class BitWriter {
@@ -99,9 +106,12 @@ function readPoly(r: BitReader): PolyBlock {
 /**
  * Genome → short base64url string.
  *
- * 48 payload bits: W/H1/H2/D take one bit per allele, P takes two (four-allele series), and
- * each polygenic block takes 12. With a version byte and a checksum byte that is 8 bytes,
- * or 11 characters — short enough for a URL fragment.
+ * 58 payload bits: W/H1/H2/D/L take one bit per allele copy, P/I/N take two each (four-allele
+ * series), and each polygenic block takes 12. Rounded up to 8 bytes, plus a version byte and a
+ * checksum byte, that is 10 bytes — 14 characters, still short enough for a URL fragment.
+ *
+ * The six spare bits are left as zero rather than being packed tighter. A tighter packing
+ * would save one character and cost the next locus a version bump.
  */
 export function serialize(g: Genome): string {
   const w = new BitWriter(PAYLOAD_BYTES);
@@ -118,6 +128,14 @@ export function serialize(g: Genome): string {
   writePoly(w, g.V);
   writePoly(w, g.G);
   writePoly(w, g.B);
+  // Appended AFTER the v1 fields, in the same order as DISCRETE_LOCI. Keeping the old fields
+  // at their old bit offsets is what lets `readV1` be the same reader with a shorter tail.
+  w.write(I_ALLELES.indexOf(g.I[0]), 2);
+  w.write(I_ALLELES.indexOf(g.I[1]), 2);
+  w.write(N_ALLELES.indexOf(g.N[0]), 2);
+  w.write(N_ALLELES.indexOf(g.N[1]), 2);
+  w.write(L_ALLELES.indexOf(g.L[0]), 1);
+  w.write(L_ALLELES.indexOf(g.L[1]), 1);
 
   const out = new Uint8Array(TOTAL_BYTES);
   out[0] = GENOME_VERSION;
@@ -146,21 +164,30 @@ export function parseGenome(s: string): ParseResult {
   const bytes = base64UrlToBytes(s);
   if (!bytes)
     return { ok: false, error: "not base64url — illegal character in genome" };
-  if (bytes.length !== TOTAL_BYTES)
+  if (bytes.length === 0) return { ok: false, error: "empty genome string" };
+
+  const version = bytes[0]!;
+  if (version !== 1 && version !== GENOME_VERSION)
     return {
       ok: false,
-      error: `wrong length: expected ${TOTAL_BYTES} bytes, got ${bytes.length}`,
+      error: `unsupported genome version ${version} (this build reads version ${GENOME_VERSION})`,
     };
-  if (bytes[0] !== GENOME_VERSION)
+
+  // Version is read FIRST, then the length expected for that version. Checking a single
+  // length up front would have reported every v1 link as "wrong length" — technically true
+  // and useless, because the actual situation is a link from an older build, which is a thing
+  // this parser can handle.
+  const total = version === 1 ? V1_TOTAL_BYTES : TOTAL_BYTES;
+  if (bytes.length !== total)
     return {
       ok: false,
-      error: `unsupported genome version ${bytes[0]} (this build reads version ${GENOME_VERSION})`,
+      error: `wrong length: expected ${total} bytes for version ${version}, got ${bytes.length}`,
     };
-  if (bytes[TOTAL_BYTES - 1] !== checksum(bytes, TOTAL_BYTES - 1))
+  if (bytes[total - 1] !== checksum(bytes, total - 1))
     return { ok: false, error: "checksum mismatch — the genome is corrupted" };
 
-  const r = new BitReader(bytes.subarray(1, 1 + PAYLOAD_BYTES));
-  const genome: Genome = {
+  const r = new BitReader(bytes.subarray(1, total - 1));
+  const common = {
     W: [W_ALLELES[r.read(1)]!, W_ALLELES[r.read(1)]!],
     H1: [H1_ALLELES[r.read(1)]!, H1_ALLELES[r.read(1)]!],
     H2: [H2_ALLELES[r.read(1)]!, H2_ALLELES[r.read(1)]!],
@@ -169,8 +196,36 @@ export function parseGenome(s: string): ParseResult {
     V: readPoly(r),
     G: readPoly(r),
     B: readPoly(r),
+  } as const;
+
+  // A v1 genome predates the inflorescence, merosity and chlorophyll loci. It is filled in
+  // with the alleles that REPRODUCE the plant that link used to show — solitary, five-petalled
+  // and viable, which is what every v1 plant was — rather than with a neutral default. An
+  // upgrade that changed the flower would be worse than rejecting the link, because the player
+  // would have no way to tell it had happened.
+  const tail =
+    version === 1
+      ? ({ I: ["i", "i"], N: ["n", "n"], L: ["L", "L"] } as const)
+      : ({
+          I: [I_ALLELES[r.read(2)]!, I_ALLELES[r.read(2)]!],
+          N: [N_ALLELES[r.read(2)]!, N_ALLELES[r.read(2)]!],
+          L: [L_ALLELES[r.read(1)]!, L_ALLELES[r.read(1)]!],
+        } as const);
+
+  return {
+    ok: true,
+    genome: {
+      ...common,
+      W: [...common.W],
+      H1: [...common.H1],
+      H2: [...common.H2],
+      D: [...common.D],
+      P: [...common.P],
+      I: [...tail.I],
+      N: [...tail.N],
+      L: [...tail.L],
+    } as Genome,
   };
-  return { ok: true, genome };
 }
 
 /**

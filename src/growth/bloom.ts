@@ -21,7 +21,14 @@ export function layoutBloom(
   const bud = openness < 0.55;
   const radius = pheno.bloomRadius * (0.42 + 0.58 * openness);
   const whorls = bud ? 1 : pheno.doubled ? 3 : 1;
-  const perWhorl = bud ? 3 : pheno.doubled ? 9 : 5;
+  // Merosity comes from the `N` series. Doubling adds a FIXED four rather than multiplying,
+  // which keeps the tuned five-petal case at exactly the nine it was hand-set to while
+  // stopping a twelve-petal double from reaching sixty petals in a bloom the size of a coin.
+  const perWhorl = bud
+    ? 3
+    : pheno.doubled
+      ? pheno.petalCount + 4
+      : pheno.petalCount;
   const petals: PetalSpec[] = [];
 
   // Petals are spaced EVENLY within a whorl (2*PI / perWhorl), and successive whorls are
@@ -39,7 +46,17 @@ export function layoutBloom(
   // an aspect ratio of 1.05 — a square. Real 5-petal flowers (buttercup, wild rose,
   // phlox) DO show gaps between petal tips; what makes them read as flowers is a broad
   // obovate margin and a visible centre, not gapless coverage.
-  const widthFactor = pheno.doubled ? 0.42 : 0.66;
+  //
+  // With merosity now genetic, a constant factor stops working: 0.66 on a twelve-petal whorl
+  // is 36 degrees of petal in a 30-degree slot, and the flower fuses into a plain disc. What
+  // has to stay constant is the FILL — the fraction of its angular slot a petal occupies —
+  // and the width that achieves it follows from the slot's half-angle.
+  //
+  // The two fill constants are not new numbers: they are the values that reproduce the
+  // hand-tuned 0.66 at five petals and 0.42 at nine. A generalisation that moved the numbers
+  // it was generalising from would be a regression wearing a refactor's clothes (§20).
+  const fill = pheno.doubled ? 0.58 : 0.51;
+  const widthFactor = 2 * Math.tan((fill * Math.PI) / perWhorl);
 
   for (let w = 0; w < whorls; w++) {
     const whorlScale = 1 - 0.22 * w;

@@ -1,6 +1,7 @@
 import { mulberry32, angleDelta } from "../rng";
 import { layoutBloom } from "./bloom";
 import type {
+  Inflorescence,
   Phenotype,
   Plant,
   StrokeSegment,
@@ -17,6 +18,28 @@ const UP = -Math.PI / 2;
 const DOWN = Math.PI / 2;
 
 /**
+ * Hard ceiling on flowers per plant.
+ *
+ * Solitary plants never come near it — a bushy one carries perhaps fifty. It exists for the
+ * combination the player is actively trying to breed: maximum branchiness carrying a raceme
+ * on every shoot, where flower count is a product of two genes rather than a sum. Each bloom
+ * is up to 48 petal paths, all redrawn every frame while the plant animates in, so an
+ * uncapped extreme genotype does not look impressive — it drops the frame rate and the plant
+ * appears to grow in slow motion, which reads as a bug rather than as a prize.
+ */
+const MAX_BLOOMS = 200;
+
+/** Ticks between lateral flowers along a shoot. Zero for architectures that have none. */
+const LATERAL_EVERY: Record<Inflorescence, number> = {
+  solitary: 0,
+  umbel: 0,
+  raceme: 6,
+  // Tighter than a raceme: a spike's flowers sit directly on the stem with no stalk between
+  // them, so they can pack closer before they collide.
+  spike: 5,
+};
+
+/**
  * How far a flower at this tip has opened, 0..1.
  *
  * Distal shoots carry younger flowers, so a real inflorescence shows open faces low and
@@ -29,7 +52,54 @@ function openness(tip: Tip, rand: () => number): number {
   return Math.min(1, Math.max(0.3, byDepth * jitter));
 }
 
+/**
+ * An albino seedling: it germinates, spends the seed's reserves, and dies.
+ *
+ * A separate function rather than a flag threaded through the main loop, because almost
+ * nothing about it is the same — no branching, no leaves, no flowers, no tropism worth
+ * modelling over so few ticks. It still produces a real Plant with real segments, because it
+ * still occupies a plot and the player still has to look at it. That is the whole design: the
+ * failure is VISIBLE and sits in the bed as evidence, rather than a seed quietly doing nothing.
+ */
+function growAlbino(pheno: Phenotype, seed: number, origin: Vec2): Plant {
+  const rand = mulberry32(seed);
+  const segments: StrokeSegment[] = [];
+  // Short and getting shorter: reserves run out. Never enough height to look like a young
+  // healthy plant that might still make it.
+  const ticks = 9 + Math.floor(rand() * 5);
+  let pos = { ...origin };
+  let dir = UP;
+  let width = pheno.baseWidth * 0.45;
+
+  for (let tick = 0; tick < ticks; tick++) {
+    dir += (rand() - 0.5) * 0.3;
+    // Each step shorter than the last — the shoot visibly gives up rather than being cut off
+    // mid-stride at an arbitrary tick count.
+    const len = 3.4 * (1 - tick / ticks);
+    const nx = pos.x + Math.cos(dir) * len;
+    const ny = pos.y + Math.sin(dir) * len;
+    const w1 = width * 0.9;
+    segments.push({
+      x0: pos.x,
+      y0: pos.y,
+      x1: nx,
+      y1: ny,
+      w0: width,
+      w1,
+      depth: 0,
+      tick,
+      chain: 0,
+    });
+    pos = { x: nx, y: ny };
+    width = w1;
+  }
+
+  return { segments, blooms: [], leaves: [], albino: true };
+}
+
 export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
+  if (!pheno.viable) return growAlbino(pheno, seed, origin);
+
   const rand = mulberry32(seed);
   const segments: StrokeSegment[] = [];
   const blooms: Bloom[] = [];
@@ -42,6 +112,107 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
   const stepLen = 1.6 + 2.4 * pheno.vigour;
   let nextId = 0;
   let leafParity = 0;
+  let flowerParity = 0;
+  const lateralEvery = LATERAL_EVERY[pheno.inflorescence];
+
+  /** Add a flower unless the plant is already at its ceiling. */
+  const addBloom = (b: Bloom): void => {
+    if (blooms.length < MAX_BLOOMS) blooms.push(b);
+  };
+
+  /**
+   * A flower's stalk, drawn as a stem chain of its own.
+   *
+   * Given its own `chain` id so the outline builder treats it as a separate stroke. Appending
+   * it to the parent's chain would smooth the pedicel INTO the stem and produce one fat
+   * S-bend where there should be a stem with something attached to it.
+   */
+  const pedicel = (
+    from: Vec2,
+    to: Vec2,
+    parentWidth: number,
+    depth: number,
+    tick: number,
+  ): void => {
+    const w0 = Math.min(parentWidth * 0.42, 2.4);
+    segments.push({
+      x0: from.x,
+      y0: from.y,
+      x1: to.x,
+      y1: to.y,
+      w0,
+      w1: w0 * 0.72,
+      depth,
+      tick,
+      chain: nextId++,
+    });
+  };
+
+  /**
+   * How open a flower borne at `tick` is by the end of the plant's life.
+   *
+   * A raceme ripens ACROPETALLY — bottom first, because the bottom flower is the oldest. That
+   * gradient is the signature of the architecture: a foxglove is recognisable as open bells
+   * below and tight buds at the tip, and a raceme with every flower equally open reads as a
+   * stick with stickers on it rather than as a raceme.
+   */
+  const ripeness = (tick: number): number =>
+    Math.min(
+      1,
+      Math.max(0.32, (1 - tick / maxTicks) * 1.2 * (0.86 + 0.28 * rand())),
+    );
+
+  /**
+   * Flowers borne along the side of a shoot — the raceme and spike architectures.
+   *
+   * The difference between the two is entirely the pedicel: a raceme's flowers stand off the
+   * stem on stalks, a spike's sit flush against it. That single number is why foxglove and
+   * plantain look nothing alike despite the same underlying arrangement.
+   */
+  const lateralFlower = (tip: Tip, tick: number): void => {
+    const side = (flowerParity++ & 1) === 0 ? 1 : -1;
+    const stalk =
+      pheno.inflorescence === "spike"
+        ? pheno.bloomRadius * 0.2
+        : pheno.bloomRadius * (0.95 + 0.35 * rand());
+    const ang = tip.dir + side * (0.95 + 0.25 * rand());
+    const at = {
+      x: tip.pos.x + Math.cos(ang) * stalk,
+      y: tip.pos.y + Math.sin(ang) * stalk,
+    };
+    if (stalk > 1.5) pedicel(tip.pos, at, tip.width, tip.depth + 1, tick);
+    addBloom(layoutBloom(pheno, at, ang, rand, ripeness(tick), tick));
+  };
+
+  /**
+   * What a shoot does when it stops growing.
+   *
+   * An umbel puts every flower on its own ray from ONE point, which is why cow parsley reads
+   * as a plate rather than as a spray. Raceme and spike terminate in a bud instead of an open
+   * flower — they flower from the bottom up, so the tip is always the youngest thing on the
+   * plant and has not opened yet.
+   */
+  const terminate = (tip: Tip, tick: number): void => {
+    if (pheno.inflorescence === "umbel") {
+      const rays = 5 + Math.floor(rand() * 3);
+      // Umbels open together, not in sequence — the synchrony IS the look.
+      const open = Math.min(1, 0.74 + 0.3 * rand());
+      for (let k = 0; k < rays; k++) {
+        const ang =
+          tip.dir + ((k / (rays - 1) - 0.5) * 2 - 0.06 + 0.12 * rand()) * 0.95;
+        const len = pheno.bloomRadius * (1.35 + 0.6 * rand());
+        const at = {
+          x: tip.pos.x + Math.cos(ang) * len,
+          y: tip.pos.y + Math.sin(ang) * len,
+        };
+        pedicel(tip.pos, at, tip.width, tip.depth, tick);
+        addBloom(layoutBloom(pheno, at, ang, rand, open, tick));
+      }
+      return;
+    }
+    const open = lateralEvery > 0 ? 0.36 + 0.14 * rand() : openness(tip, rand);
+    addBloom(layoutBloom(pheno, tip.pos, tip.dir, rand, open, tick));
+  };
 
   let tips: Tip[] = [
     {
@@ -140,6 +311,23 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
         });
       }
 
+      // 3c. Lateral flowers. A raceme or spike carries flowers ALONG the shoot rather than
+      //     only at its tip, which is what turns one flower per stem into a flower head — and
+      //     it is the single change that makes two plants of the same colour distinguishable
+      //     from across the room, which no amount of petal work achieves.
+      //
+      //     Gated on width, not only on age: a shoot thin enough to be a twig cannot hold a
+      //     flower off to the side, and without the gate the outermost twigs of a bushy
+      //     raceme sprouted flowers larger than the stem carrying them.
+      if (
+        lateralEvery > 0 &&
+        tip.age > 4 &&
+        tip.age % lateralEvery === 0 &&
+        tip.width > MIN_WIDTH * 1.9
+      ) {
+        lateralFlower(tip, tick);
+      }
+
       // 4. Branch
       //    Probability spans a WIDE range across the gene. At the old 0.08 ceiling the
       //    difference between a mid and a max branchiness was 0.044 vs 0.08 per tick —
@@ -180,9 +368,7 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       const reachedGround = tip.cleared && tip.pos.y >= groundY;
       if (tip.width < MIN_WIDTH || tip.vigourLeft <= 0 || reachedGround) {
         tip.alive = false;
-        blooms.push(
-          layoutBloom(pheno, tip.pos, tip.dir, rand, openness(tip, rand), tick),
-        );
+        terminate(tip, tick);
       }
     }
 
@@ -190,10 +376,7 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
   }
 
   // Any tip still alive when the clock runs out still blooms.
-  for (const tip of tips)
-    blooms.push(
-      layoutBloom(pheno, tip.pos, tip.dir, rand, openness(tip, rand), maxTicks),
-    );
+  for (const tip of tips) terminate(tip, maxTicks);
 
-  return { segments, blooms, leaves };
+  return { segments, blooms, leaves, albino: false };
 }

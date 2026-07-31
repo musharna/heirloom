@@ -35,6 +35,18 @@ export const PALETTE = {
   stem: "#3d5c46",
   stemHi: "#557a5f",
   stemRim: "rgba(196,224,201,0.55)",
+  /**
+   * An albino seedling — `ll`, no chlorophyll at all.
+   *
+   * Cream rather than a desaturated green, because a desaturated green reads as "drawn in
+   * poor light" and the player would take it for a rendering fault. Cream against the dark
+   * ground reads as a specific condition of the plant, which is what it is. The shade and
+   * highlight strips are translucent, so they shade this pair as they do the green one and
+   * nothing else in the paint path needs to know.
+   */
+  stemAlbino: "#c3b98a",
+  stemAlbinoHi: "#ded4a2",
+  stemAlbinoRim: "rgba(250,244,206,0.6)",
   // Translucent, not opaque, so one pair of tones shades BOTH stem colours. Opaque bands
   // would need a matched pair per base colour, and every future colour would need two more.
   stemShade: "rgba(12,24,16,0.26)",
@@ -251,7 +263,13 @@ export function paintPlant(
     fillOutline(
       ctx,
       outline,
-      chain[0]!.depth === 0 ? PALETTE.stemHi : PALETTE.stem,
+      plant.albino
+        ? chain[0]!.depth === 0
+          ? PALETTE.stemAlbinoHi
+          : PALETTE.stemAlbino
+        : chain[0]!.depth === 0
+          ? PALETTE.stemHi
+          : PALETTE.stem,
     );
 
     // Round the stem. Two strips inside the silhouette — a shadow band on the far side and a
@@ -281,7 +299,7 @@ export function paintPlant(
       for (let i = 1; i < outline.length; i++)
         ctx.lineTo(outline[i]!.x, outline[i]!.y);
       ctx.closePath();
-      ctx.strokeStyle = PALETTE.stemRim;
+      ctx.strokeStyle = plant.albino ? PALETTE.stemAlbinoRim : PALETTE.stemRim;
       ctx.lineWidth = 1.2;
       ctx.stroke();
     }

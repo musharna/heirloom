@@ -28,6 +28,9 @@ const BASE: Phenotype = {
   hueClass: 0,
   white: false,
   bloomRadius: 22,
+  petalCount: 5,
+  inflorescence: "solitary",
+  viable: true,
 };
 
 // EXACTLY ONE axis differs from BASE per panel. The previous sheet changed hue and

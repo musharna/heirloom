@@ -29,6 +29,9 @@ const P: Phenotype = {
   hueClass: 0,
   white: false,
   bloomRadius: 14,
+  petalCount: 5,
+  inflorescence: "solitary",
+  viable: true,
 };
 
 describe("visibleSegments", () => {

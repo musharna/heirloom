@@ -17,6 +17,9 @@ const BASE: Phenotype = {
   hueClass: 0,
   white: false,
   bloomRadius: 14,
+  petalCount: 5,
+  inflorescence: "solitary",
+  viable: true,
 };
 const at = (): { x: number; y: number } => ({ x: 0, y: 0 });
 

@@ -1,8 +1,13 @@
-import type { Phenotype } from "../types";
+import type { Inflorescence, Phenotype } from "../types";
 import { dosage, type Genome } from "./genome";
 import {
   D_ALLELES,
+  INFLORESCENCE_OF,
+  I_ALLELES,
+  L_ALLELES,
   MAX_DOSAGE,
+  N_ALLELES,
+  PETAL_COUNT_OF,
   P_ALLELES,
   PETAL_SHAPE_OF,
   W_ALLELES,
@@ -32,6 +37,38 @@ export function isWhite(g: Genome): boolean {
 /** `dd` — the recessive that converts stamens to petals. */
 export function isDoubled(g: Genome): boolean {
   return dominant(D_ALLELES, g.D) === "d";
+}
+
+/** Which architecture the `I` series expresses. */
+export function inflorescenceOf(g: Genome): Inflorescence {
+  return INFLORESCENCE_OF[dominant(I_ALLELES, g.I)];
+}
+
+/** Petals per whorl from the `N` series. */
+export function petalCountOf(g: Genome): number {
+  return PETAL_COUNT_OF[dominant(N_ALLELES, g.N)];
+}
+
+/**
+ * `ll` — albino. The seedling has no chlorophyll, so it lives on the seed's reserves and dies.
+ *
+ * Stated as `isViable` rather than `isAlbino` because that is what the rest of the code needs
+ * to ask. If a second lethal is ever added, this function grows a clause and nothing else in
+ * the codebase has to learn about it.
+ */
+export function isViable(g: Genome): boolean {
+  return dominant(L_ALLELES, g.L) === "L";
+}
+
+/**
+ * Whether a plant carries albinism WITHOUT showing it.
+ *
+ * Nothing in the render path uses this — a carrier is by definition indistinguishable. It
+ * exists so the tests can state the property that makes the locus worth having: that carriers
+ * are common, invisible, and the only route to an albino.
+ */
+export function isCarrier(g: Genome): boolean {
+  return g.L[0] !== g.L[1];
 }
 
 /** 0..1 from a polygenic block's 0..12 dosage. */
@@ -69,8 +106,29 @@ export function express(g: Genome): Phenotype {
     branchWidthRatio: 0.76 - 0.13 * b,
     doubled: isDoubled(g),
     petalShape: PETAL_SHAPE_OF[dominant(P_ALLELES, g.P)],
+    petalCount: petalCountOf(g),
+    inflorescence: inflorescenceOf(g),
     hueClass: hueDosage(g),
     white: isWhite(g),
-    bloomRadius: 14 + 9 * (1 - b) + 4 * v,
+    // Many-flowered architectures carry SMALLER flowers. This is the same trade real plants
+    // make — an umbel of forty florets and a solitary peony cost the plant a comparable
+    // amount — and without it a twelve-flowered raceme of full-size blooms is simply the best
+    // genotype in the game, which would collapse the whole point of open-ended breeding.
+    bloomRadius:
+      (14 + 9 * (1 - b) + 4 * v) * CLUSTER_SIZE_TRADE[inflorescenceOf(g)],
+    viable: isViable(g),
   };
 }
+
+/**
+ * Per-flower size penalty for carrying many flowers. Solitary pays nothing.
+ *
+ * Umbels are hit hardest because every floret opens at once at one point; a raceme spreads
+ * its flowers along the shoot and over time, so it can afford slightly larger ones.
+ */
+const CLUSTER_SIZE_TRADE: Record<Inflorescence, number> = {
+  solitary: 1,
+  raceme: 0.72,
+  spike: 0.66,
+  umbel: 0.58,
+};

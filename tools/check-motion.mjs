@@ -10,6 +10,7 @@
  * or the garden is not swaying, it is drifting out of its own soil.
  */
 import { chromium } from 'playwright';
+import { gestures } from './gestures.mjs';
 
 const URL = process.env.GARDEN_URL ?? 'http://localhost:5173/garden/';
 const browser = await chromium.launch();
@@ -86,23 +87,19 @@ if (before.empty >= 0 || before.occupied.length > 0) {
   if (flowers.length) {
     const box2 = await page.locator('#c').boundingBox();
     const size2 = await page.evaluate(() => window.__size());
-    const toPg = (q) => ({ x: box2.x + (q.x * box2.width) / size2.w, y: box2.y + (q.y * box2.height) / size2.h });
-    const f = toPg(flowers[0]);
-    await page.mouse.move(f.x, f.y);
-    await page.mouse.down();
-    await page.mouse.up();
-    await page.waitForTimeout(150);
+    // `tap`, not a raw down/up: a press slower than 450ms is a HOLD, which reads the plant
+    // instead of taking a seed — and then nothing is displaced and this check reports that the
+    // recede never happened. That is the failure it produced, in exactly those words.
+    const g2 = gestures(page, box2, size2);
+    await g2.tap(flowers[0]);
 
     const occupied = (await page.evaluate(() => window.__state())).occupied[0];
-    const slot = toPg(await page.evaluate(() => window.__traySlot(0)));
     const soil = await page.evaluate(() => window.__soil);
     const px = await page.evaluate((i) => window.__plotX(i), occupied);
-    const drop = toPg({ x: px, y: soil - 25 });
-    await page.mouse.move(slot.x, slot.y);
-    await page.mouse.down();
-    await page.mouse.move(drop.x, drop.y, { steps: 8 });
-    await page.mouse.up();
-    await page.waitForTimeout(60);
+    await g2.drag(
+      await page.evaluate(() => window.__traySlot(0)),
+      { x: px, y: soil - 25 },
+    );
 
     const midReceding = await page.evaluate(() => window.__receding());
     check('a replaced plant is in flight, not yet in the background',

@@ -7,9 +7,10 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
+    "soak": "node tools/soak.mjs",
     "shoot": "node tools/shoot-garden.mjs",
     "shoot:lookdev": "node tools/shoot.mjs",
-    "drive": "node tools/drive-verbs.mjs && node tools/drive-forest.mjs && node tools/drive-persist.mjs && node tools/drive-notebook.mjs && node tools/check-motion.mjs && node tools/check-viewports.mjs"
+    "drive": "node tools/drive-verbs.mjs && node tools/drive-forest.mjs && node tools/drive-persist.mjs && node tools/drive-notebook.mjs && node tools/check-motion.mjs && node tools/check-viewports.mjs && node tools/check-phone.mjs"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

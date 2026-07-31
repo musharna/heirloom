@@ -695,3 +695,91 @@ direction nothing was watching; and a bushy umbel put a full plate of florets on
 its terminals and read as coral. Side axes now carry a reduced head — not a full one, and not a
 solitary flower, since gating the head off scattered the flowers back across the plant's height
 and measurably undid the "all at one point" signature.
+
+## 22. The field notebook — making the depth legible without giving it away
+
+Done 2026-07-30. 279 tests, `tsc --noEmit` clean, five drivers pass, 26/26 mutants killed.
+
+§21 added eleven loci, a linkage map and a hidden carrier. The player could see none of it. A
+plant showed its phenotype and nothing else, there was no record of what had been crossed with
+what, and — worst — no way to tell a carrier from a clear plant even after breeding the very
+evidence that proved it. The most interesting locus in the game was invisible in both
+directions.
+
+### The refusal is the design
+
+Printing a genotype would have been one function call. It would also have deleted the albinism
+locus outright, because **a carrier is defined by being indistinguishable**. Hand over `Ll` for
+free and nobody ever has to breed a plant to find out what it is.
+
+So the card shows what has been OBSERVED and what those observations entail. One rule covers all
+eight discrete loci: a child expresses the most dominant allele it holds, so if a child is more
+recessive than its parent, the allele the parent contributed cannot have been the one it shows —
+it must be carrying a second, hidden one. An albino seedling proves _both_ its parents carry `l`.
+
+It claims only what follows. From a frilled parent and a pointed child, "pointed petals or
+plainer" — never a guess at the exact allele. And every claim carries its evidence count, because
+the honest caveat is that `crossOf` mutates after inheriting, so roughly one deduction in a few
+hundred rests on a mutation. One odd seedling is a curiosity; three is a genotype.
+
+### Selfing existed as a hole in the design
+
+Dragging a flower onto its own plant did nothing. That was not a missing convenience — selfing is
+_the_ classic test for a hidden recessive, and without it the albinism locus was a fact about the
+world with no instrument for investigating it. A carrier selfed throws the recessive in a quarter
+of its seedlings; no other move available to the player comes close.
+
+A clone cannot do this job, and the card says so: "a cutting of a coral umbel — same plant, no
+new evidence". That line exists because clicking a flower repeatedly is the most natural thing to
+try, and it is the one action that can never answer anything.
+
+### Evidence is filed on GROWTH, not on crossing
+
+A cross is recorded when its child has finished growing, not when the seed was made. Filing at
+cross time would let the player deduce a parent's hidden alleles from a seed they never planted —
+the disclosure §4 forbids, arriving by a longer route — and would remove the reason to plant
+anything. An albino counts: it never blooms, but it finishes growing, and it is the single most
+informative thing that can happen in this garden.
+
+Save format v2 carries the notebook and each seed's provenance, and still reads v1. It also fixed
+a latent bug the notebook turned into a data-losing one: the loader restarted the seed counter at
+`tray.length + 1` on every load, so two sessions would both mint a seed 3 and the second one's
+outcome would be silently discarded as a duplicate observation.
+
+### What the drivers found that nothing else could
+
+**The inspect gesture was unreachable.** The first design was "click the plant somewhere that is
+not a flower". That works on a sparse plant and fails completely on the plants §21 made possible:
+a bushy raceme carries sixty-eight flowers and leaves almost no bare stem. Every attempt to open
+a card landed on a bloom and took a seed instead. Press-and-hold replaced it — it consumes no
+gesture the game already uses, needs no on-screen control, and works identically under a finger
+and a mouse.
+
+**Then the gesture cancelled itself.** The hold opened the card; the `pointerup` that ended the
+hold was read as a tap on the plant and toggled it straight back off. The card appeared and
+vanished inside one gesture.
+
+**Then the hit box was wrong in a way that made the gesture positional.** `plantAt` measured the
+plant's bounding box from its STEMS, so a flower on a long pedicel — or an entire umbel's plate —
+fell outside it. Holding a stem opened the card; holding a flower at the canopy edge did nothing
+and cloned instead. Two behaviours decided by where the flower happened to be, and neither
+asserted anywhere.
+
+That last one surfaced through a control that had started passing for the wrong reason.
+`drag(a, a, 2)` was written to check "a zero-distance drag is a click, not a cross" — and its
+down-to-up interval measured **554ms**, past the press threshold. It had quietly become a test of
+the inspect gesture, still passing whenever the flower fell outside the hit box. Both gestures are
+now pinned separately, because they are separated only by duration and a change to the threshold
+would otherwise eat one of them silently.
+
+### And a fixed threshold that had already been fixed once
+
+`drive-persist.mjs` asserted `forestCoverage > 1000`. Measured across seven runs the legitimate
+range is **114 to 15,672** — genome-dependent, with real runs at 1,703 and 2,733 sitting just over
+a floor that was already inside the population it was meant to accept. The 114 run was a correct
+rebuild of a genuinely tiny plant, which §21 made more likely by adding albino seedlings.
+
+This is the _same defect_, in the same words, that §20 records finding and fixing in
+`check-viewports.mjs`. It was left standing in the sibling file. **Fixing a bug in one place is
+not fixing the bug** — the lesson from §20 was written down and did not travel to the file next
+to it.

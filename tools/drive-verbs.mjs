@@ -96,13 +96,43 @@ if (b) {
   check('dragging flower onto flower yields a seed', after.tray === before.tray + 1,
     `tray ${before.tray} -> ${after.tray}`);
 
-  // NEGATIVE CONTROL: dragging a flower onto ITSELF is a click, not a cross — it must still
-  // yield exactly one seed, not two, and must not be treated as a self-cross.
+  // NEGATIVE CONTROL: a zero-distance drag on one flower is a CLICK, so it clones — one seed,
+  // not two, and not a self-cross.
+  //
+  // It has to be a genuinely quick press. This used to be `drag(a, a, 2)`, whose down-to-up
+  // interval measured 554ms — past the press-and-hold threshold — so it had quietly become a
+  // test of the inspect gesture that happened to still pass whenever the flower fell outside
+  // the plant's hit box. Two behaviours, decided by flower position, and neither one asserted.
   before = await state();
-  await drag(a, a, 2);
+  {
+    const at = toPage(a);
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down();
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+  }
   after = await state();
   check('CONTROL: flower dragged onto itself is one clone, not a cross',
     after.tray === before.tray + 1, `tray ${before.tray} -> ${after.tray}`);
+
+  // ...and the counterpart rule: holding the SAME flower reads the plant instead of cloning
+  // it. One press, two gestures, separated only by duration — so both have to be pinned or a
+  // change to the threshold silently eats one of them.
+  before = await state();
+  {
+    const at = toPage(a);
+    await page.mouse.move(at.x, at.y);
+    await page.mouse.down();
+    await page.waitForTimeout(700);
+    await page.mouse.up();
+    await page.waitForTimeout(150);
+  }
+  after = await state();
+  const heldCard = await page.evaluate(() => window.__card());
+  check('holding a flower reads the plant instead of taking a seed',
+    heldCard !== null && after.tray === before.tray,
+    `card ${heldCard === null ? 'closed' : 'open'}, tray ${before.tray} -> ${after.tray}`);
+  await page.keyboard.press('Escape');
 }
 
 // --- SPLICE: drag one tray seed onto another -----------------------------------------

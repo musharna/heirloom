@@ -589,6 +589,17 @@ function plantAt(p: Vec2): number | null {
       minY = Math.min(minY, s.y0, s.y1);
       maxY = Math.max(maxY, s.y0, s.y1);
     }
+    // FLOWERS COUNT AS PART OF THE PLANT. Measuring the stems alone left every bloom on a
+    // long pedicel — and an umbel's whole plate — outside the box, so whether a press-and-hold
+    // opened the card depended on which flower you happened to hold. It worked on a stem, did
+    // nothing on a flower at the canopy edge, and the difference was invisible to the player.
+    for (const b of occ.plant.blooms) {
+      if (b.tick > age) continue;
+      minX = Math.min(minX, b.center.x - b.radius);
+      maxX = Math.max(maxX, b.center.x + b.radius);
+      minY = Math.min(minY, b.center.y - b.radius);
+      maxY = Math.max(maxY, b.center.y + b.radius);
+    }
     if (minX === Infinity) continue;
     // Padding, because a stem is a few pixels wide and the bounding box of a sparse plant is
     // mostly air. This is a forgiving target on purpose: it is an inspect gesture, not a
@@ -779,6 +790,26 @@ function frame(): void {
     if (!plot.occupant) paintPlotMarker(plotXs[i]!);
   }
 
+  // Which plant the open card is about.
+  //
+  // Without this the card floats over the bed describing "a white raceme" while three white
+  // racemes are on screen, and the player has to guess which one they held. A mark at the base
+  // rather than around the canopy: a ring big enough to enclose a plant would dominate the
+  // frame, and the base is where the plant meets its plot, which is the thing being identified.
+  if (inspecting !== null) {
+    const occ = garden.plots[inspecting]?.occupant;
+    const base = occ?.plant.segments[0];
+    if (base) {
+      ctx.save();
+      ctx.strokeStyle = "rgba(236,196,116,0.75)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.ellipse(base.x0, base.y0 + 2, 17, 5, 0, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // Affordance: ring whatever the pointer could act on right now.
   const hover = drag ? null : bloomAt(garden, pointer, now);
   if (hover) paintHalo(hover.bloom.center, hover.bloom.radius * 1.25, 0.5);
@@ -901,7 +932,11 @@ const LESSONS: { verb: Verb; text: string; when: () => boolean }[] = [
   {
     verb: "clone",
     text: "click a flower to take a seed",
-    when: () => garden.tray.length === 0,
+    // Not shown to someone who has already got a seed by selfing or crossing. They have
+    // demonstrated they can fill the tray; repeating the most basic instruction back at them
+    // reads as the game not having noticed.
+    when: () =>
+      garden.tray.length === 0 && !learned.has("self") && !learned.has("cross"),
   },
   {
     verb: "plant",

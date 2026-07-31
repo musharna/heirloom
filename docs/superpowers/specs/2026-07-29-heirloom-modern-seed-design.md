@@ -857,3 +857,83 @@ player drops a seed, the second a jump at the handover from the animation to the
 buffer. The placement is also **reserved when the plant leaves the bed**, not computed on
 arrival — several plants can be receding at once, so the layer index the buffer would compute
 later is not the one the animation eased toward.
+
+## 24. Hardening — a long session, a phone, and a retracted defect
+
+Done 2026-07-31. 320 tests, `tsc --noEmit` clean, seven drivers pass.
+
+Three items, chosen because they were the least exciting available and the two previous
+"harden" items had both turned out to be real bugs. So did these.
+
+### Nothing had ever been run for more than a few minutes
+
+Every driver built a garden of five or six plants and stopped, which meant **every unbounded
+thing in the codebase had been measured exactly once, at zero**. `tools/soak.mjs` plays
+hundreds of rounds and watches what grows that should not. It found three defects, none of
+which any short test could have seen.
+
+**The garden never saved while you played.** A trailing debounce with no ceiling never fires as
+long as the player keeps acting, because every action resets it. 150 rounds at ~420ms each
+wrote _nothing at all_ for the entire run — the save appeared only once the driver stopped. An
+engaged player closing the tab would have lost the lot. The debounce is capped at 5s now and
+flushed on `visibilitychange`/`pagehide`, which are the events that actually fire when a phone
+app is swiped away. **The bug is that the next action arrives**, which is precisely why
+single-action testing cannot find it.
+
+**Every retirement froze the page for seconds.** `Forest.retire` still painted a vector plant
+under `ctx.filter`, and §23 had already established that a canvas filter blurs every drawing
+operation separately. 6–9 seconds per replacement — and sixty in a row when a saved background
+is rebuilt on load. It composites the cached bitmap now: ~420ms per round, flat across 150.
+
+**`garden.retired` grew without bound**, holding the heaviest objects in the game, and since
+the render cache is keyed on the plant object, each one also pinned an offscreen canvas. It is
+a queue now, drained every frame, with a separate counter for "how many have you replaced".
+`retirementLog` is capped in memory too rather than only on save — `relayout` re-grows one
+plant per entry, so an afternoon's play would have turned rotating a phone into a freeze that
+got worse the longer you had been enjoying yourself.
+
+Measured after: heap stable, save bounded at ~15KB, relayout 8.8ms, 61fps.
+
+### The phone, and two fixes that did not fix
+
+60fps in a headless browser on a sixteen-core laptop proves very little. Under CPU throttling
+the garden ran at 25fps at 4× and 14fps at 6×. Two mechanisms were tried and **both were
+measured and both failed**:
+
+- **Lower the drawing resolution**, on the theory that the bottleneck was pixels. At two
+  different device ratios the canvas held the _same_ 0.36 megapixels and ran at 29.9 and 44.4
+  fps. The compositor works at the device's physical resolution whatever our backing store is,
+  so shrinking it bought nothing and cost sharpness.
+- **Draw every other frame.** The loop rate duly doubled, 28 → 45fps — and the rate at which
+  anything actually _changed on screen_ fell from 28 to 22. Halving the draws halved what the
+  player sees; the loop being idle the rest of the time is worth nothing to them.
+
+Both are reverted. A drawn frame costs ~27ms on a 4×-slowed phone, of which under 4ms is
+JavaScript; the rest is rasterising and compositing a full-screen canvas. The remaining lever
+is dirty-rectangle rendering, which sway makes genuinely hard. The numbers are now guarded at
+~23fps (4×) and ~17fps (6×) — slow, and playable, since nothing here is timed or needs aim.
+
+### A defect that was not one
+
+The spike architecture was recorded as reading "as a dense mass rather than countable flowers",
+carried in the backlog, and offered as work twice. **Measured, it is not the outlier.** Mean
+nearest-neighbour distance in flower diameters: umbel 0.43, spike 0.49, raceme 0.56 — the spike
+sits _between_ the two forms that read fine, and its flower band is genuinely narrower than a
+raceme's, which is what makes a spike a spike. Lupin, veronica and plantain all look like this.
+
+It was a preference stated as a defect. Retracted, with the measurement kept as a real guard:
+if any architecture ever _does_ pack tighter than the others, that number will say so. This is
+the second time in this project that a backlog entry survived unexamined into a work plan and
+then evaporated on contact with a measurement (§19 retracted two of five).
+
+### The same class of bug, a third and fourth time
+
+Every driver hand-rolled its pointer gestures, so adding press-and-hold silently reinterpreted
+any click slower than 450ms as an inspect — and the resulting failures read as "the bed would
+not fill" and "the recede never happened". `tools/gestures.mjs` is now the one place that knows
+what a tap is.
+
+And a control this session's own save work broke: the `pagehide` flush fired during the
+driver's reload and wrote back the garden it had just cleared, so the negative control was
+handing storage a value it had been told to forget and then reporting that storage worked. It
+clears through CDP from a blank page now.

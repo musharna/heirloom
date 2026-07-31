@@ -365,6 +365,66 @@ describe("the flowers that are grown are the flowers that get DRAWN", () => {
   });
 });
 
+describe("no architecture packs its flowers tighter than the others", () => {
+  /** Mean distance from each drawn flower to its nearest neighbour, in flower DIAMETERS. */
+  const separation = (p: Partial<Phenotype>, trade: number): number => {
+    let total = 0;
+    let n = 0;
+    for (let s = 0; s < 12; s++) {
+      const plant = grow({ ...p, bloomRadius: BASE.bloomRadius * trade }, 500 + s * 17);
+      const shown = cullOccludedBlooms(plant.blooms);
+      for (const a of shown) {
+        let best = Infinity;
+        for (const b of shown)
+          if (b !== a)
+            best = Math.min(
+              best,
+              Math.hypot(a.center.x - b.center.x, a.center.y - b.center.y),
+            );
+        if (best < Infinity) {
+          total += best / (a.radius * 2);
+          n++;
+        }
+      }
+    }
+    return n ? total / n : 0;
+  };
+
+  it("RETRACTION: the spike is not the dense outlier it was called", () => {
+    // Recorded because the claim was made, carried in a backlog, and offered as work twice
+    // before anyone measured it. A spike was said to read as "a dense mass rather than
+    // countable flowers". Measured, its flowers sit FURTHER apart than an umbel's and the
+    // difference from a raceme is small — and an umbel reads perfectly well.
+    //
+    // What was actually being described is that a spike is a dense column, which is what a
+    // spike is: lupin, veronica and plantain all look like this. Preference, not defect.
+    //
+    // The test remains as a real guard: if any architecture ever DOES pack tighter than the
+    // others, that is worth knowing, and this is the number that would say so.
+    const sep = {
+      raceme: separation({ inflorescence: "raceme" }, 0.72),
+      spike: separation({ inflorescence: "spike" }, 0.66),
+      umbel: separation({ inflorescence: "umbel" }, 0.58),
+    };
+    expect(sep.spike).toBeGreaterThan(sep.umbel);
+    expect(sep.spike).toBeGreaterThan(sep.raceme * 0.8);
+    // ...and none of them overlap so far that flowers stop being distinguishable at all.
+    for (const [name, v] of Object.entries(sep))
+      expect(v, name).toBeGreaterThan(0.35);
+  });
+
+  it("keeps a spike's flowers CLOSER to its stem than a raceme's", () => {
+    // The property that actually distinguishes the two, and the one worth defending: a spike's
+    // flowers are sessile. If this ever inverted, the two architectures would be the same
+    // plant with different flower counts.
+    const band = (arch: "raceme" | "spike", trade: number) =>
+      meanOver({ inflorescence: arch, bloomRadius: BASE.bloomRadius * trade }, (p) =>
+        median(pedicelLengths(p)),
+      );
+    expect(band("spike", 0.66)).toBeLessThan(band("raceme", 0.72) * 0.5);
+  });
+});
+
 describe("petal count is a real allele series, not a dial", () => {
   const bloomOf = (p: Partial<Phenotype>) =>
     layoutBloom(

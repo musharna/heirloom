@@ -122,7 +122,7 @@ canonical plant and a shared link reproduces it exactly.
 ## Tests
 
 ```sh
-npm test              # 317 unit tests
+npm test              # 320 unit tests
 npx tsc --noEmit
 ```
 
@@ -131,7 +131,7 @@ driver that runs the real thing in a real browser:
 
 ```sh
 npm run dev &     # the drivers drive a real server
-npm run drive     # all six, in order
+npm run drive     # all seven, in order
 ```
 
 - `tools/drive-verbs.mjs` — clicks real flowers, asserts the four verbs fire
@@ -139,6 +139,8 @@ npm run drive     # all six, in order
 - `tools/drive-persist.mjs` — builds a garden, reloads the page, asserts it came back
 - `tools/drive-notebook.mjs` — selfs a plant, grows the seedling, reads the card
 - `tools/check-motion.mjs` — asserts the scene moves, the geometry does not, and it runs at 60fps
+- `tools/check-phone.mjs` — mobile viewport under CPU throttling, with measured floors
+- `npm run soak` — plays hundreds of rounds; watches save size, heap and frame rate
 - `tools/check-viewports.mjs` — real device viewports; aspect distortion and rotation
 - `npm run shoot` — screenshots the garden into `shots/`
 

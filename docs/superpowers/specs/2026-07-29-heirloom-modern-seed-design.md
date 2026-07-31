@@ -913,7 +913,7 @@ JavaScript; the rest is rasterising and compositing a full-screen canvas. The re
 is dirty-rectangle rendering, which sway makes genuinely hard.
 
 Measured across eight runs: **20.2–20.7 fps at a 4× slowdown and 12.0–15.0 at 6×** — slow, and
-playable, since nothing here is timed or needs aim. The floors were first set from a *single*
+playable, since nothing here is timed or needs aim. The floors were first set from a _single_
 sample of 23.2 and 17.3 and began failing immediately, which is the third time in this project
 that a threshold picked from one measurement landed inside the legitimate range and reported
 ordinary variation as a regression.
@@ -942,3 +942,62 @@ And a control this session's own save work broke: the `pagehide` flush fired dur
 driver's reload and wrote back the garden it had just cleared, so the negative control was
 handing storage a value it had been told to forget and then reporting that storage worked. It
 clears through CDP from a blank page now.
+
+## 25. Visual depth — and a harness that kept catching itself
+
+Done 2026-07-31. 332 tests, `tsc --noEmit` clean, seven drivers pass.
+
+The accumulating forest has had depth since milestone 4. The bed the player actually works in
+never did: every plant drawn at the same scale, the same brightness and the same sharpness, so
+where two overlapped they interpenetrated and neither read as being in front.
+
+### Measure first, because this project has been wrong about pixels twice
+
+§19 retracted an "over-saturated" palette that measured _less_ saturated than its reference.
+§24 retracted a "dense" spike whose flowers sit _further_ apart than an umbel's. So
+`tools/measure-depth.mjs` came before any change — and it caught **three errors in itself**
+before it measured anything useful:
+
+1. **It compared plants of different genomes.** The 18.5-unit brightness spread it first
+   reported was flower colour, not position. Fixed with the control the measurement cannot work
+   without: **one genome in every plot**, so every plant is identical by construction and any
+   remaining difference is the renderer talking about distance.
+2. **It read bounding boxes in plant space** while plants are _drawn_ transformed — reporting
+   further plants as **larger** (+0.6).
+3. **It filtered pixels by a brightness threshold**, which excludes precisely the pixels a
+   dimming cue dims, cancelling the effect it existed to detect.
+
+A fourth is recorded rather than fixed: per-plant brightness cannot be measured reliably when
+plants overlap, because an occluded plant holds less ink whatever its own depth. That number
+swung 0.26 / −0.37 / −0.54 across runs and is labelled in the tool as not being evidence. The
+dimming cue is pinned in `test/bed.test.ts` instead, where nothing stands in front of it.
+
+### What shipped, and what it measures
+
+- **Per-plot depth**, spread by the golden ratio rather than ramped left to right — a
+  monotonic bed reads as a perspective grid rather than as plants at different distances.
+  Painted furthest-first so overlap resolves into occlusion. **Size vs depth measures −1**,
+  stable across runs.
+- **Contact shadows.** Soil under a stem measured 0.1 units darker than soil beside it —
+  identical, which is to say every plant was pasted onto the ground. Now 4–7. They had to move
+  _on top of_ `paintSoil`: drawn with the plants they were painted over by the soil band and
+  did nothing, and the measurement reported that faithfully as 0.5 against 0.4.
+- **Ground that recedes**, because depth lifts a further plant and a flat soil edge left it
+  floating with a gap underneath. The bed's depth and the world's ground plane are one problem.
+- **Petals with light through them** — a translucent tip, a shadow pooling where petals stack,
+  and a midrib. Only affordable because a settled plant is rendered once into a cached bitmap;
+  per-frame it would be thousands of extra gradients. Judged at 4× on the lookdev sheet, since
+  a flower in play is about 12px across and none of this is visible there.
+- **A horizon**, very quietly, so the bed stands in a space rather than against a flat field.
+
+### Hit-testing and the hooks had to follow
+
+Depth is a 14% shrink and a 13px lift at the far end — several times a flower's click slack. So
+every hit test goes through the inverse transform, or clicking a flower where it _appears_
+would miss it, worst on the plants furthest back where nobody would look for it.
+
+The same mistake was already in the test hooks. `__blooms()` returned plant-space centres, so
+every driver was aiming at where flowers used to be; `drive-forest` reported "depth 2" of an
+expected 5 and the cause read as a missing seed. **A hook that reports model coordinates for a
+transformed render is lying to every caller**, and it lies hardest exactly where the transform
+is strongest.

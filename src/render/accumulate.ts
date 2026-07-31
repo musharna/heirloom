@@ -15,6 +15,23 @@ import { applyPlacement } from "./motion";
  * The trade is that a composited plant can never be changed again — which is precisely what
  * "retired" means, so nothing is given up.
  */
+/**
+ * Which placement a retirement should use: the reserved one, or a fresh one for this layer.
+ *
+ * A one-line decision, pulled out as a function because it is the only part of `Forest` that
+ * can be tested without a DOM — and it is the part that matters. When a reservation is ignored,
+ * the recede animation eases a plant toward one spot in the background and the composite drops
+ * it somewhere else, which is visible only in the frame where the two swap over.
+ */
+export function resolvePlacement(
+  at: Placement | undefined,
+  genomeKey: number,
+  layers: number,
+  w: number,
+): Placement {
+  return at ?? placeRetired(genomeKey, layers, w);
+}
+
 export class Forest {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -55,7 +72,7 @@ export class Forest {
   retire(plant: Plant, genomeKey: number, at?: Placement): void {
     const origin = plant.segments[0];
     if (!origin) return;
-    const place: Placement = at ?? placeRetired(genomeKey, this.layers, this.w);
+    const place: Placement = resolvePlacement(at, genomeKey, this.layers, this.w);
     const c = this.ctx;
 
     // `source-atop` confines the wash to pixels that already exist, so the empty background

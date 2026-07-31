@@ -100,8 +100,20 @@ check('the same plants came back',
   `${JSON.stringify(afterCodes.plots)}`);
 check('the same seeds came back',
   JSON.stringify(afterCodes.tray) === JSON.stringify(savedCodes.tray));
+// The floor is LOW on purpose, and the low floor is what makes it honest.
+//
+// It was 1000, which assumed every plant is a big one. Coverage depends entirely on WHICH
+// genome happened to retire: measured across seven runs it ranged 114 to 15,672, with several
+// legitimate runs landing at 1,703 and 2,733 — just over a threshold that was already inside
+// the population it was meant to accept. The 114 run was a correct rebuild of a genuinely tiny
+// plant (an albino seedling is a few dozen pixels of stem). This is the same defect that was
+// found and fixed in check-viewports.mjs and left standing here in the sibling file.
+//
+// A low floor still discriminates, because both failure modes this guards against — nothing
+// composited, or composited off-canvas — read as ZERO, and the negative control below proves a
+// fresh garden reads zero. Geometry is check-viewports.mjs's job, not this one's.
 check('the background was rebuilt from the replay list',
-  after.forestDepth === saved.retired && after.forestCoverage > 1000,
+  after.forestDepth === saved.retired && after.forestCoverage > 40,
   `depth ${after.forestDepth} (retired ${saved.retired}), coverage ${after.forestCoverage}`);
 check('no notice was shown — the save loaded cleanly',
   !(await hintText()).includes('rejected'), await hintText());

@@ -12,6 +12,7 @@ import {
 } from "../src/game/garden";
 import { genomesEqual, randomGenome } from "../src/genome/genome";
 import { serialize } from "../src/genome/serialize";
+import type { Notebook } from "../src/game/notebook";
 
 const XS = [100, 300, 500, 700, 900];
 const SOIL = 400;
@@ -143,7 +144,9 @@ describe("fromSave — names every failure, never silently resets", () => {
 
   it("names WHICH plot holds a corrupt genome", () => {
     const save = good();
-    save.plots = save.plots.map((p, i) => (i === 0 && p ? "!!!!!!!!!!!" : p));
+    save.plots = save.plots.map((p, i) =>
+      i === 0 && p ? { g: "!!!!!!!!!!!" } : p,
+    );
     const firstOccupied = save.plots.findIndex((p) => p !== null);
     const r = fromSave(save, XS, SOIL);
     if (firstOccupied === 0) {
@@ -154,7 +157,7 @@ describe("fromSave — names every failure, never silently resets", () => {
 
   it("names a corrupt tray entry", () => {
     const save = good();
-    save.tray = [...save.tray, "AAAAAAAAAAA"]; // valid base64url, wrong checksum
+    save.tray = [...save.tray, { g: "AAAAAAAAAAA" }]; // base64url, wrong checksum
     const r = fromSave(save, XS, SOIL);
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/tray slot/);
@@ -171,5 +174,105 @@ describe("fromSave — names every failure, never silently resets", () => {
   it("POSITIVE CONTROL: an untouched save still loads", () => {
     // Every rejection test above would pass on a loader that refused everything.
     expect(fromSave(good(), XS, SOIL).ok).toBe(true);
+  });
+});
+
+describe("the notebook survives a reload", () => {
+  const nb = (): Notebook => ({
+    crosses: [
+      { seedId: 11, child: "child-code", parents: ["mum-code", "dad-code"] },
+      { seedId: 12, child: "other", parents: ["mum-code", "mum-code"] },
+    ],
+  });
+
+  it("comes back exactly as it went in", () => {
+    // Evidence is cumulative and irreplaceable: a notebook that only remembered the current
+    // session would make the whole feature worthless, because the interesting deductions are
+    // the ones that take several sittings to earn.
+    const g = populated();
+    const r = fromSave(toSave(g, 200, replayOf(g), nb()), XS, SOIL);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.notebook.crosses).toEqual(nb().crosses);
+  });
+
+  it("carries each seed's provenance through the round trip", () => {
+    // Without this the notebook stops being able to file anything after a reload: a restored
+    // seed with no parents produces a seedling that is evidence about nobody.
+    let g = populated();
+    g = addSeed(g, randomGenome(mulberry32(3)), {
+      parents: ["mum-code", "dad-code"],
+      origin: "self",
+    });
+    const r = fromSave(toSave(g, 200, replayOf(g)), XS, SOIL);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const back = r.garden.tray.at(-1)!;
+    expect(back.parents).toEqual(["mum-code", "dad-code"]);
+    expect(back.origin).toBe("self");
+  });
+
+  it("never lets the seed counter fall back onto an id already used", () => {
+    // The bug this exists for: the loader used to restart the counter at `tray.length + 1`, so
+    // a second session would mint a seed 3 that the notebook had already filed an observation
+    // under — and the new seedling's outcome would be silently dropped as a duplicate.
+    let g = populated();
+    for (let i = 0; i < 4; i++) g = addSeed(g, randomGenome(mulberry32(9 + i)));
+    const highest = Math.max(...g.tray.map((s) => s.id));
+    const r = fromSave(toSave(g, 200, replayOf(g)), XS, SOIL);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.garden.nextSeedId).toBeGreaterThan(highest);
+  });
+
+  it("CONTROL: the old id scheme WOULD have collided", () => {
+    // Pins that the assertion above discriminates, against the arithmetic that shipped.
+    let g = populated();
+    for (let i = 0; i < 4; i++)
+      g = addSeed(g, randomGenome(mulberry32(20 + i)));
+    const highest = Math.max(...g.tray.map((s) => s.id));
+    const oldScheme = Math.min(g.tray.length, TRAY_CAP) + 1;
+    expect(oldScheme).toBeLessThanOrEqual(highest);
+  });
+
+  it("reads a version-1 save, which had neither notebook nor provenance", () => {
+    // A v1 save predates all of this. Refusing it would delete an existing player's whole
+    // garden to gain fields that would have been empty anyway.
+    const g = populated();
+    const v2 = toSave(g, 200, replayOf(g), nb());
+    const v1 = {
+      v: 1,
+      plots: v2.plots.map((p) => (p ? p.g : null)),
+      ages: v2.ages,
+      tray: v2.tray.map((t) => t.g),
+      replay: v2.replay,
+    };
+    const r = fromSave(v1, XS, SOIL);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.notebook.crosses).toEqual([]);
+    expect(r.garden.tray.every((s) => s.parents === undefined)).toBe(true);
+    // ...and the plants themselves came back, which is the point of accepting it at all.
+    expect(r.garden.plots.filter((p) => p.occupant).length).toBe(
+      g.plots.filter((p) => p.occupant).length,
+    );
+  });
+
+  it("drops ONE unreadable notebook entry rather than the whole garden", () => {
+    // Deliberately asymmetric with the rest of this file. A broken plot means the garden
+    // cannot be rebuilt and the player must be told; a broken piece of evidence means one
+    // lost inference, and refusing to open the game over it would be wildly out of
+    // proportion.
+    const g = populated();
+    const save = toSave(g, 200, replayOf(g), nb()) as Record<string, unknown>;
+    save["notebook"] = [
+      { seedId: 1, child: "ok", parents: ["a", "b"] },
+      { seedId: "not a number", child: "bad", parents: ["a", "b"] },
+      { nonsense: true },
+    ];
+    const r = fromSave(save, XS, SOIL);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.notebook.crosses).toHaveLength(1);
   });
 });

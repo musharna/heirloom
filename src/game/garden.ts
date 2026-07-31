@@ -1,17 +1,42 @@
 import { express } from "../genome/express";
 import { inherit, mutate, randomGenome, type Genome } from "../genome/genome";
-import { genomeSeed } from "../genome/serialize";
+import { genomeSeed, serialize } from "../genome/serialize";
 import { growPlant } from "../growth/sim";
 import type { Plant } from "../types";
 
 /**
- * A seed. Carries a genome and nothing else — deliberately.
+ * How a seed came to exist.
  *
- * §4: traits are not disclosed before bloom. A seed that advertised what it would become
- * would remove the only pacing mechanism the game has, so there is no place to put that
- * information even if a later view wanted it.
+ * Carried separately from the parents because a CLONE and a SELF-CROSS both record the same
+ * plant twice, and they are not the same event at all: a clone is genetically its parent and
+ * can never reveal what that parent is hiding, while a self-cross is the one move that
+ * reliably does. A card that could not tell them apart would leave the player unable to learn
+ * the single most useful thing about the four verbs.
  */
-export type Seed = { id: number; genome: Genome };
+export type Origin = "founder" | "clone" | "self" | "cross";
+
+/**
+ * A seed. Carries a genome and its PROVENANCE — never its traits.
+ *
+ * §4: traits are not disclosed before bloom, and that still holds. Parentage is not a trait:
+ * it is what the player just did, and they already watched themselves do it. Recording it here
+ * is what lets the notebook say "this came from a white × coral cross" once the plant is up,
+ * and what lets a seedling's outcome count as evidence about its parents.
+ *
+ * The tray still shows none of it. A seed that advertised its parents would let the player
+ * infer the child before planting it, which is the same disclosure §4 forbids by a longer
+ * route.
+ */
+export type Seed = {
+  id: number;
+  genome: Genome;
+  /** Serialized parents. Absent for a founder, which has none. */
+  parents?: [string, string];
+  origin?: Origin;
+};
+
+/** Where a seed came from, threaded from the verb that made it to the card that shows it. */
+export type Provenance = { parents: [string, string]; origin: Origin };
 
 export type Planting = {
   genome: Genome;
@@ -20,6 +45,11 @@ export type Planting = {
   plantedAt: number;
   /** Last tick at which anything about this plant changes. */
   maxTick: number;
+  /** The seed this grew from, so one observation cannot be counted twice. */
+  seedId?: number;
+  /** Serialized parents, carried over from the seed. */
+  parents?: [string, string];
+  origin?: Origin;
 };
 
 export type Plot = { x: number; occupant: Planting | null };
@@ -72,8 +102,12 @@ export function grow(genome: Genome, x: number, soilY: number): Planting {
   return { genome, plant, plantedAt: 0, maxTick };
 }
 
-export function addSeed(g: Garden, genome: Genome): Garden {
-  const seed: Seed = { id: g.nextSeedId, genome };
+export function addSeed(g: Garden, genome: Genome, from?: Provenance): Garden {
+  const seed: Seed = {
+    id: g.nextSeedId,
+    genome,
+    ...(from ? { parents: from.parents, origin: from.origin } : {}),
+  };
   const tray = [...g.tray, seed];
   return {
     ...g,
@@ -120,7 +154,13 @@ export function plantSeed(
   const plot = g.plots[plotIndex];
   if (!seed || !plot) return g;
 
-  const planting = { ...grow(seed.genome, plot.x, soilY), plantedAt: now };
+  const planting: Planting = {
+    ...grow(seed.genome, plot.x, soilY),
+    plantedAt: now,
+    seedId: seed.id,
+    ...(seed.parents ? { parents: seed.parents } : {}),
+    ...(seed.origin ? { origin: seed.origin } : {}),
+  };
   const plots = g.plots.map((p, i) =>
     i === plotIndex ? { ...p, occupant: planting } : p,
   );
@@ -142,7 +182,10 @@ export function spliceSeeds(
   const a = findSeed(g, aId);
   const b = findSeed(g, bId);
   if (!a || !b || aId === bId) return g;
-  return addSeed(g, crossOf(a.genome, b.genome, rand));
+  return addSeed(g, crossOf(a.genome, b.genome, rand), {
+    parents: [serialize(a.genome), serialize(b.genome)],
+    origin: "cross",
+  });
 }
 
 /** Has this planting finished growing? */

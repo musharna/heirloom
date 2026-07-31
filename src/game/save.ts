@@ -1,8 +1,21 @@
 import { parseGenome, serialize } from "../genome/serialize";
 import type { Genome } from "../genome/genome";
-import { TRAY_CAP, createGarden, grow, type Garden } from "./garden";
+import {
+  TRAY_CAP,
+  createGarden,
+  grow,
+  type Garden,
+  type Origin,
+  type Seed,
+} from "./garden";
+import {
+  CROSS_CAP,
+  emptyNotebook,
+  type Cross,
+  type Notebook,
+} from "./notebook";
 
-export const SAVE_VERSION = 1;
+export const SAVE_VERSION = 2;
 export const SAVE_KEY = "heirloom.garden.v1";
 
 /**
@@ -18,14 +31,41 @@ export const REPLAY_CAP = 60;
 /** One retired plant: its genome, and where it stood. */
 export type ReplayEntry = { g: string; x: number };
 
-export type SaveV1 = {
+/**
+ * A plant or seed as stored: its genome, plus where it came from.
+ *
+ * Provenance has to survive a reload or the notebook loses its evidence at the first refresh —
+ * and the notebook is worth nothing if it only remembers the current session.
+ */
+export type StoredPlant = {
+  g: string;
+  /** Seed id, so one observation cannot be counted twice across reloads. */
+  id?: number;
+  /** Serialized parents. Absent for a founder. */
+  p?: [string, string];
+  /** How the seed was made: clone, self, cross. Absent for a founder. */
+  o?: Origin;
+};
+
+export type SaveV2 = {
   v: number;
-  /** Serialized genome per plot, or null for a bare plot. Length fixes the plot count. */
-  plots: (string | null)[];
+  /** Genome and provenance per plot, or null for a bare plot. Length fixes the plot count. */
+  plots: (StoredPlant | null)[];
   /** Growth age of each plot's occupant at save time, so a plant resumes mid-growth. */
   ages: number[];
-  tray: string[];
+  tray: StoredPlant[];
   replay: ReplayEntry[];
+  /** Observed crosses — the notebook's entire contents. */
+  notebook: Cross[];
+  /**
+   * The seed counter.
+   *
+   * Persisted because the notebook keys observations on seed id, and the previous build
+   * restarted the counter from the tray length on every load. Two sessions would then both
+   * mint a seed 3, and the second one's outcome would be silently discarded as a duplicate of
+   * the first. A latent bug before the notebook existed; a data-losing one afterwards.
+   */
+  nextSeedId: number;
 };
 
 /**
@@ -36,25 +76,130 @@ export type SaveV1 = {
  * from `garden.retired` would therefore write an empty list on the first save after a reload
  * and silently delete the player's entire history, one session at a time. The caller owns the
  * running history; this function only serializes it.
+ *
+ * The notebook is passed in for the same reason and would fail the same way.
  */
-export function toSave(g: Garden, now: number, replay: ReplayEntry[]): SaveV1 {
+export function toSave(
+  g: Garden,
+  now: number,
+  replay: ReplayEntry[],
+  notebook: Notebook = emptyNotebook(),
+): SaveV2 {
+  const store = (
+    genome: Genome,
+    id?: number,
+    p?: [string, string],
+    o?: Origin,
+  ): StoredPlant => ({
+    g: serialize(genome),
+    ...(id === undefined ? {} : { id }),
+    ...(p ? { p } : {}),
+    ...(o ? { o } : {}),
+  });
   return {
     v: SAVE_VERSION,
     plots: g.plots.map((p) =>
-      p.occupant ? serialize(p.occupant.genome) : null,
+      p.occupant
+        ? store(
+            p.occupant.genome,
+            p.occupant.seedId,
+            p.occupant.parents,
+            p.occupant.origin,
+          )
+        : null,
     ),
     ages: g.plots.map((p) => (p.occupant ? now - p.occupant.plantedAt : 0)),
-    tray: g.tray.map((s) => serialize(s.genome)),
+    tray: g.tray.map((s) => store(s.genome, s.id, s.parents, s.origin)),
     replay: replay.slice(-REPLAY_CAP),
+    notebook: notebook.crosses.slice(-CROSS_CAP),
+    nextSeedId: g.nextSeedId,
   };
 }
 
 export type LoadResult =
-  | { ok: true; garden: Garden; replay: { genome: Genome; x: number }[] }
+  | {
+      ok: true;
+      garden: Garden;
+      replay: { genome: Genome; x: number }[];
+      notebook: Notebook;
+    }
   | { ok: false; error: string };
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Read one stored plant from either format.
+ *
+ * A version-1 save wrote bare genome strings. Those are still valid — they simply carry no
+ * provenance, which is exactly right: a v1 save predates the notebook, so there is nothing it
+ * could have known. Rejecting them instead would throw away every existing player's garden to
+ * gain a field that would have been empty anyway.
+ */
+function readStored(
+  v: unknown,
+  where: string,
+): { ok: true; value: StoredPlant } | { ok: false; error: string } {
+  if (typeof v === "string") return { ok: true, value: { g: v } };
+  if (!isRecord(v) || typeof v["g"] !== "string")
+    return { ok: false, error: `${where} is not a genome` };
+  const p = v["p"];
+  const parents =
+    Array.isArray(p) &&
+    p.length === 2 &&
+    typeof p[0] === "string" &&
+    typeof p[1] === "string"
+      ? ([p[0], p[1]] as [string, string])
+      : undefined;
+  const id = typeof v["id"] === "number" ? v["id"] : undefined;
+  const o = v["o"];
+  const origin =
+    o === "clone" || o === "self" || o === "cross" || o === "founder"
+      ? (o as Origin)
+      : undefined;
+  return {
+    ok: true,
+    value: {
+      g: v["g"],
+      ...(id === undefined ? {} : { id }),
+      ...(parents ? { p: parents } : {}),
+      ...(origin ? { o: origin } : {}),
+    },
+  };
+}
+
+/**
+ * Crosses from a save, skipping any entry that is malformed.
+ *
+ * The one place in this file that does NOT reject the whole save on bad input, and the
+ * asymmetry is deliberate. A broken plot means the garden cannot be rebuilt and the player
+ * must be told. A broken notebook entry means one piece of evidence is unreadable — dropping
+ * the player's entire garden over it would be a wildly disproportionate response to a lost
+ * inference.
+ */
+function readNotebook(raw: unknown): Notebook {
+  if (!Array.isArray(raw)) return emptyNotebook();
+  const crosses: Cross[] = [];
+  for (const c of raw) {
+    if (!isRecord(c)) continue;
+    const p = c["parents"];
+    if (
+      typeof c["seedId"] !== "number" ||
+      typeof c["child"] !== "string" ||
+      !Array.isArray(p) ||
+      p.length !== 2 ||
+      typeof p[0] !== "string" ||
+      typeof p[1] !== "string"
+    )
+      continue;
+    crosses.push({
+      seedId: c["seedId"],
+      child: c["child"],
+      parents: [p[0], p[1]],
+    });
+  }
+  return { crosses: crosses.slice(-CROSS_CAP) };
 }
 
 /**
@@ -75,7 +220,10 @@ export function fromSave(
   soilY: number,
 ): LoadResult {
   if (!isRecord(raw)) return { ok: false, error: "save is not an object" };
-  if (raw["v"] !== SAVE_VERSION)
+  // Version 1 is still readable: it wrote bare genome strings and had no notebook, both of
+  // which this loader handles. Refusing it would delete an existing player's whole garden to
+  // gain fields that would have been empty.
+  if (raw["v"] !== SAVE_VERSION && raw["v"] !== 1)
     return {
       ok: false,
       error: `save version ${String(raw["v"])} (this build reads version ${SAVE_VERSION})`,
@@ -98,28 +246,38 @@ export function fromSave(
   const restoredPlots = garden.plots.map((p) => ({ ...p }));
 
   for (let i = 0; i < plots.length; i++) {
-    const code = plots[i];
-    if (code === null || code === undefined) continue;
-    if (typeof code !== "string")
-      return { ok: false, error: `plot ${i} is not a genome string` };
-    const parsed = parseGenome(code);
+    const entry = plots[i];
+    if (entry === null || entry === undefined) continue;
+    const read = readStored(entry, `plot ${i}`);
+    if (!read.ok) return { ok: false, error: read.error };
+    const parsed = parseGenome(read.value.g);
     if (!parsed.ok) return { ok: false, error: `plot ${i}: ${parsed.error}` };
     const age = Number(ages[i]) || 0;
     restoredPlots[i]!.occupant = {
       ...grow(parsed.genome, plotXs[i]!, soilY),
       // Negative plantedAt against a clock restarting at 0 resumes growth where it left off.
       plantedAt: -age,
+      ...(read.value.id === undefined ? {} : { seedId: read.value.id }),
+      ...(read.value.p ? { parents: read.value.p } : {}),
+      ...(read.value.o ? { origin: read.value.o } : {}),
     };
   }
 
-  const seeds: Genome[] = [];
-  for (const [i, code] of tray.entries()) {
-    if (typeof code !== "string")
-      return { ok: false, error: `tray slot ${i} is not a genome string` };
-    const parsed = parseGenome(code);
+  const seeds: Seed[] = [];
+  for (const [i, entry] of tray.entries()) {
+    const read = readStored(entry, `tray slot ${i}`);
+    if (!read.ok) return { ok: false, error: read.error };
+    const parsed = parseGenome(read.value.g);
     if (!parsed.ok)
       return { ok: false, error: `tray slot ${i}: ${parsed.error}` };
-    seeds.push(parsed.genome);
+    seeds.push({
+      // Falls back to the index for a v1 save, which had no ids. Those seeds have no
+      // provenance either, so nothing in the notebook can key off them.
+      id: read.value.id ?? i + 1,
+      genome: parsed.genome,
+      ...(read.value.p ? { parents: read.value.p } : {}),
+      ...(read.value.o ? { origin: read.value.o } : {}),
+    });
   }
 
   const restored: { genome: Genome; x: number }[] = [];
@@ -132,11 +290,23 @@ export function fromSave(
     restored.push({ genome: parsed.genome, x: Number(entry["x"]) || 0 });
   }
 
-  garden = {
-    ...garden,
-    plots: restoredPlots,
-    tray: seeds.slice(-TRAY_CAP).map((genome, i) => ({ id: i + 1, genome })),
-    nextSeedId: Math.min(seeds.length, TRAY_CAP) + 1,
+  const kept = seeds.slice(-TRAY_CAP);
+  // The counter must never go BACKWARDS past a seed that already exists, or a later seed
+  // would reuse an id the notebook has already filed an observation under and its outcome
+  // would be silently discarded as a duplicate.
+  const stored = Number(raw["nextSeedId"]);
+  const highest = kept.reduce((m, s) => Math.max(m, s.id), 0);
+  const nextSeedId = Math.max(
+    Number.isFinite(stored) ? stored : 0,
+    highest + 1,
+    1,
+  );
+
+  garden = { ...garden, plots: restoredPlots, tray: kept, nextSeedId };
+  return {
+    ok: true,
+    garden,
+    replay: restored.slice(-REPLAY_CAP),
+    notebook: readNotebook(raw["notebook"]),
   };
-  return { ok: true, garden, replay: restored.slice(-REPLAY_CAP) };
 }

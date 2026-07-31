@@ -25,6 +25,20 @@ async function ready() {
   return page.locator('#c').boundingBox();
 }
 const state = () => page.evaluate(() => window.__state());
+/**
+ * Wipe storage for the origin WITHOUT the running game getting a chance to write it back.
+ *
+ * `origin` is captured from the live page rather than parsed here, because this module's own
+ * `URL` constant shadows the global `URL` class and `new URL(...)` throws.
+ */
+let originForClear = '';
+const clearStorage = async () => {
+  const client = await page.context().newCDPSession(page);
+  await client.send('Storage.clearDataForOrigin', {
+    origin: originForClear,
+    storageTypes: 'local_storage',
+  });
+};
 const codes = () => page.evaluate(() => window.__codes());
 const hintText = () => page.locator('#hint').textContent();
 
@@ -32,6 +46,7 @@ await page.goto(URL, { waitUntil: 'networkidle' });
 await page.evaluate(() => localStorage.clear());
 await page.reload({ waitUntil: 'networkidle' });
 let box = await ready();
+originForClear = await page.evaluate(() => location.origin);
 
 const size = await page.evaluate(() => window.__size());
 const toPage = (p) => ({
@@ -118,8 +133,15 @@ check('no notice was shown — the save loaded cleanly',
 
 // NEGATIVE CONTROL. Without this, every check above would also pass if the game simply
 // regenerated an identical garden from a fixed seed and localStorage did nothing at all.
-await page.evaluate(() => localStorage.clear());
-await page.reload({ waitUntil: 'networkidle' });
+//
+// Cleared through CDP from a blank page, NOT with `localStorage.clear()` in the running game.
+// The game flushes a pending save on `pagehide` — it has to, or a phone user who swipes the
+// app away loses whatever they did since the last debounce — and that flush fires during the
+// reload and writes the garden straight back. The control was passing storage a value it had
+// just been told to forget, then reporting that storage worked.
+await page.goto('about:blank');
+await clearStorage();
+await page.goto(URL, { waitUntil: 'networkidle' });
 box = await ready();
 const freshCodes = await codes();
 check('CONTROL: clearing storage gives a DIFFERENT garden',
@@ -140,7 +162,8 @@ check('a save from another version is rejected by name',
   text.includes('rejected') && text.includes('version'), text);
 
 // --- Share links -------------------------------------------------------------------------
-await page.evaluate(() => localStorage.clear());
+await page.goto('about:blank');
+await clearStorage();
 const shareCode = savedCodes.tray[0] ?? savedCodes.plots.find(Boolean);
 await page.goto(`${URL}#g=${shareCode}`, { waitUntil: 'networkidle' });
 await ready();

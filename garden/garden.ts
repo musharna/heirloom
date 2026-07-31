@@ -898,6 +898,30 @@ function dropTarget(): number | null {
   return plot !== null && pointer.y < SOIL + 24 ? plot : null;
 }
 
+/**
+ * There is no adaptive quality here, and that is a conclusion rather than an omission.
+ *
+ * Two mechanisms were tried against a throttled phone and BOTH were measured and both failed.
+ *
+ * Reducing the drawing resolution, on the reasoning that the bottleneck was pixels: at two
+ * different device ratios the canvas held the SAME 0.36 megapixels and ran at 29.9 and 44.4
+ * fps. The compositor works at the device's physical resolution whatever our backing store is,
+ * so shrinking it bought nothing and cost sharpness.
+ *
+ * Drawing every other frame, on the reasoning that the cost was per-frame work: the loop rate
+ * duly doubled, 28 fps to 45 — and the rate at which anything actually CHANGED ON SCREEN fell
+ * from 28 to 22. Halving the draws halved what the player sees; the loop being free the rest of
+ * the time is worth nothing to them.
+ *
+ * A drawn frame costs about 27ms on a 4x-slowed phone, of which under 4ms is JavaScript. The
+ * remainder is rasterising and compositing a full-screen canvas, and the only real lever left
+ * is not redrawing the parts that did not change — dirty-rectangle rendering, which the sway
+ * makes genuinely hard, since a swaying plant dirties its whole bounding box every frame.
+ *
+ * Measured, so a later change can be compared against it: ~28fps at a 4x CPU slowdown and
+ * ~17fps at 6x. Slow, and playable — nothing here is timed or requires aim.
+ */
+
 function frame(): void {
   // Composite anything newly retired before drawing, so a replaced plant appears in the
   // background on the same frame it leaves the bed rather than blinking out of existence.

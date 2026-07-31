@@ -88,6 +88,21 @@ const median = (xs: number[]): number => {
   return s[Math.floor(s.length / 2)]!;
 };
 
+/**
+ * Sizes of each umbel head, found by grouping pedicels that share an origin.
+ *
+ * Every ray of one head starts at the same terminal point, so the multiset of group sizes IS
+ * the list of heads and how many florets each carries.
+ */
+function headSizes(plant: Plant): number[] {
+  const at = new Map<string, number>();
+  for (const s of pedicels(plant)) {
+    const k = `${s.x0.toFixed(2)},${s.y0.toFixed(2)}`;
+    at.set(k, (at.get(k) ?? 0) + 1);
+  }
+  return [...at.values()];
+}
+
 describe("inflorescence architecture changes the SILHOUETTE", () => {
   it("gives every clustered form more flowers than a solitary one", () => {
     // The reason the trait exists. Hue and petal shape are invisible once a plant is a
@@ -224,6 +239,66 @@ describe("inflorescence architecture changes the SILHOUETTE", () => {
       7,
     );
     expect(plant.blooms.length).toBeLessThanOrEqual(200);
+  });
+});
+
+describe("density — the difference between many flowers and a texture", () => {
+  it("puts a full head on a main axis and a REDUCED one on a side twig", () => {
+    // With a full plate on all thirty terminals a bushy umbel read as coral, not as thirty
+    // flower heads: past a certain density small florets stop being countable and become a
+    // texture, and the plant loses the architecture the locus exists to express.
+    //
+    // Reduced, not absent. Gating the head off gave side twigs a solitary flower each, which
+    // scattered the plant's flowers back across its whole height and measurably undid the
+    // "all at one point" signature — the spread test above caught that attempt.
+    const bushy = grow({ inflorescence: "umbel", branchiness: 1 }, 4242);
+    const sizes = headSizes(bushy);
+    expect(sizes.length).toBeGreaterThan(4);
+    expect(sizes.some((n) => n === 3)).toBe(true); // reduced, on side axes
+    expect(sizes.some((n) => n >= 5)).toBe(true); // full, on the main axis
+  });
+
+  it("CONTROL: an unbranched plant carries only FULL heads", () => {
+    // Pins that the rule keys on axis order rather than shrinking every head. Without it, an
+    // implementation that reduced all heads to three rays would satisfy the test above and
+    // quietly delete the full umbel from the game.
+    const sparse = grow({ inflorescence: "umbel", branchiness: 0 }, 4242);
+    expect(headSizes(sparse).every((n) => n >= 5)).toBe(true);
+  });
+});
+
+describe("foliage belongs to the plant, not to the flower head", () => {
+  const leafSize = (p: Partial<Phenotype>): number =>
+    meanOver(p, (plant) =>
+      plant.leaves.length
+        ? plant.leaves.reduce((a, l) => a + l.length, 0) / plant.leaves.length
+        : 0,
+    );
+
+  it("keeps leaf size independent of how big the FLOWERS are", () => {
+    // Leaves were sized off bloomRadius, so the cluster size trade shrank every clustered
+    // plant's foliage by up to 40% as a side effect. With five times the flower mass on top,
+    // those plants read as a blob on a stick — the defect §19 had already fixed once,
+    // reintroduced from a direction nothing was watching.
+    const small = leafSize({ bloomRadius: 9 });
+    const large = leafSize({ bloomRadius: 24 });
+    expect(Math.abs(small - large)).toBeLessThan(0.01);
+  });
+
+  it("CONTROL: leaf size DOES follow leafScale", () => {
+    // Otherwise the assertion above is satisfied by leaves of a fixed size, which would be a
+    // different bug with the same test result.
+    expect(leafSize({ leafScale: 24 })).toBeGreaterThan(
+      leafSize({ leafScale: 9 }) * 1.5,
+    );
+  });
+
+  it("gives a clustered plant the same foliage as a solitary one", () => {
+    // The property as the player sees it, stated end-to-end rather than through the field
+    // that implements it.
+    const solitary = leafSize({ inflorescence: "solitary", bloomRadius: 16 });
+    const umbel = leafSize({ inflorescence: "umbel", bloomRadius: 16 * 0.58 });
+    expect(umbel).toBeGreaterThan(solitary * 0.95);
   });
 });
 

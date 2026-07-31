@@ -12,6 +12,7 @@
  *   GARDEN_URL=... node tools/check-viewports.mjs
  */
 import { chromium, devices } from 'playwright';
+import { gestures } from './gestures.mjs';
 const b = await chromium.launch();
 let fails = 0;
 for (const [name, dev] of [['Pixel 7 portrait', devices['Pixel 7']],
@@ -78,10 +79,11 @@ for (const [name, dev] of [['Pixel 7 portrait', devices['Pixel 7']],
     // yields no seed, the round does nothing, and the whole check then fails on "bed did not
     // fill" — a flaky harness reporting a defect that is not there. Seen once in five runs.
     let got = s.tray;
+    const g = gestures(p, box2, world);
     for (const cand of [flowers[Math.floor(flowers.length / 2)], flowers[0], flowers.at(-1)]) {
-      const f = toPg(cand);
-      await p.mouse.move(f.x, f.y); await p.mouse.down(); await p.mouse.up();
-      await p.waitForTimeout(120);
+      // `tap`, not a raw down/up: a press slower than 450ms is a HOLD, which reads the plant
+      // instead of taking a seed. That failure looked like "the bed would not fill".
+      await g.tap(cand);
       got = (await p.evaluate(() => window.__state())).tray;
       if (got > s.tray) break;
     }

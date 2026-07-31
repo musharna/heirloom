@@ -149,8 +149,38 @@ check('the card names where the plant came from',
 check('the card never prints a genotype',
   text !== null && !/\^|allele|locus|genotype/i.test(text), text ?? '');
 
-await click({ x: size.w - 12, y: 24 });
+// Click somewhere genuinely AWAY — computed from the card's own rectangle rather than
+// guessed. A fixed corner is not "away": the card is positioned beside its plant, so on a
+// right-hand plant the top-right corner is ON the card, and clicking the card correctly does
+// nothing. The test was failing on the one behaviour it was not testing.
+const away = await page.evaluate(() => {
+  const r = document.getElementById('card').getBoundingClientRect();
+  const c = document.getElementById('c').getBoundingClientRect();
+  // Bottom-left of the canvas if the card is anywhere near the top, top-left otherwise.
+  const y = r.top < c.top + c.height / 2 ? c.bottom - 12 : c.top + 12;
+  return { x: c.left + 10, y };
+});
+await page.mouse.move(away.x, away.y);
+await page.mouse.down();
+await page.mouse.up();
+await page.waitForTimeout(150);
 check('clicking away closes the card', (await card()) === null);
+check('CONTROL: clicking the card itself does NOT close it', await (async () => {
+  // The counterpart, and the reason the check above needed care: a panel you dismiss by
+  // touching it is a panel you cannot read on a phone without dismissing it.
+  if (stem) await hold(stem);
+  const r = await page.evaluate(() => {
+    const b = document.getElementById('card').getBoundingClientRect();
+    return { x: b.left + b.width / 2, y: b.bottom - 12 };
+  });
+  await page.mouse.move(r.x, r.y);
+  await page.mouse.down();
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  const still = (await card()) !== null;
+  await page.keyboard.press('Escape');
+  return still;
+})(), 'a card must survive being read');
 
 // --- CONTROL: the notebook does not know what it has not been shown ------------------------
 //

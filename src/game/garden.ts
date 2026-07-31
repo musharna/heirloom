@@ -58,14 +58,23 @@ export type Garden = {
   plots: Plot[];
   tray: Seed[];
   /**
-   * Plantings displaced from a plot, in the order they were displaced.
+   * Plantings displaced from a plot and NOT YET composited into the background.
    *
    * The whole planting, not just the genome: the background composites PIXELS, and a genome
    * would have to be re-expressed and re-grown to produce any. Keeping the grown plant makes
-   * retirement a move rather than a rebuild. §7's replay list only needs the genomes, and
-   * those are still right here.
+   * retirement a move rather than a rebuild.
+   *
+   * A QUEUE, drained every frame — not a history. It used to be the latter, and that made it
+   * an unbounded array of the heaviest objects in the game: a retired plant holds its stems,
+   * its several hundred flowers and every petal of each, and since the render cache is keyed on
+   * the plant object, holding the plant also pinned an offscreen canvas of it. A few hundred
+   * replacements — a long afternoon — would have been hundreds of megabytes that nothing could
+   * ever read again. The history that IS still needed is the replay list, which holds genome
+   * strings and is capped.
    */
   retired: Planting[];
+  /** How many plants have EVER been displaced. The queue above is emptied; this is not. */
+  retiredTotal: number;
   nextSeedId: number;
 };
 
@@ -83,6 +92,7 @@ export function createGarden(plotXs: number[]): Garden {
     plots: plotXs.map((x) => ({ x, occupant: null })),
     tray: [],
     retired: [],
+    retiredTotal: 0,
     nextSeedId: 1,
   };
 }
@@ -169,6 +179,7 @@ export function plantSeed(
     plots,
     tray: g.tray.filter((s) => s.id !== seedId),
     retired: plot.occupant ? [...g.retired, plot.occupant] : g.retired,
+    retiredTotal: g.retiredTotal + (plot.occupant ? 1 : 0),
   };
 }
 

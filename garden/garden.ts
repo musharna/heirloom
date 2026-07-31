@@ -47,11 +47,18 @@ import {
   swayAt,
 } from "../src/render/motion";
 import { placeRetired, type Placement } from "../src/render/forest";
+import {
+  bedDepth,
+  paintOrder,
+  toCanvasSpace,
+  toPlotSpace,
+} from "../src/render/bed";
 import { express } from "../src/genome/express";
 import { mulberry32 } from "../src/rng";
 import {
   PALETTE,
   paintPlant,
+  paintContactShadow,
   paintSoil,
   paintStage,
 } from "../src/render/stage";
@@ -513,7 +520,7 @@ canvas.addEventListener("pointerdown", (e) => {
     drag = { kind: "seed", id: seed, from: p };
     return;
   }
-  const hit = bloomAt(garden, p, now);
+  const hit = bloomAt(garden, p, now, 1.15, localToPlot);
   if (hit) {
     drag = {
       kind: "bloom",
@@ -568,7 +575,7 @@ function release(e: PointerEvent): void {
   const travelled = Math.hypot(p.x - d.from.x, p.y - d.from.y);
 
   if (d.kind === "bloom") {
-    const onto = bloomAt(garden, p, now);
+    const onto = bloomAt(garden, p, now, 1.15, localToPlot);
     if (onto && onto.plotIndex !== d.plotIndex) {
       // CROSS — two different plants.
       const partner = garden.plots[onto.plotIndex]!.occupant!.genome;
@@ -869,7 +876,10 @@ function recordGrownPlants(): void {
  *
  * Stiffness comes from the phenotype, so a weeping plant moves like one.
  */
-function paintSwaying(occ: Garden["plots"][number]["occupant"]): void {
+function paintSwaying(
+  occ: Garden["plots"][number]["occupant"],
+  plotIndex: number,
+): void {
   if (!occ) return;
   const base = occ.plant.segments[0];
   const k = base
@@ -877,8 +887,19 @@ function paintSwaying(occ: Garden["plots"][number]["occupant"]): void {
         stiffness: express(occ.genome).stiffness,
       })
     : 0;
+  const d = bedDepth(plotIndex);
   ctx.save();
-  if (base) applySway(ctx, k, base.y0);
+  if (base) {
+    // Depth first, then sway: the sway is a property of the plant, so it should be scaled by
+    // distance along with everything else rather than being applied at full size on top.
+    ctx.translate(base.x0, base.y0 + d.dy);
+    ctx.scale(d.scale, d.scale);
+    ctx.translate(-base.x0, -base.y0);
+    // Blended toward the ground, which dims and desaturates in one operation — the same cue
+    // the background forest uses, at a fraction of the strength.
+    ctx.globalAlpha = d.alpha;
+    applySway(ctx, k, base.y0);
+  }
   // Cached once the plant has stopped changing. `maxTick` is when the last SEGMENT is drawn;
   // flowers keep opening for a while after that, so the settle point is later than "grown".
   paintPlantCached(
@@ -890,6 +911,21 @@ function paintSwaying(occ: Garden["plots"][number]["occupant"]): void {
   );
   ctx.restore();
 }
+
+/**
+ * A canvas point in a given plot's own space.
+ *
+ * Every hit test goes through this, because every plant is DRAWN through the matching forward
+ * transform. The two must agree or the game develops a quiet offset between where a flower is
+ * and where it can be touched — and the offset is largest on the plants furthest back, which
+ * is exactly where nobody would think to look for it.
+ */
+const localToPlot = (plotIndex: number, p: Vec2): Vec2 => {
+  const occ = garden.plots[plotIndex]?.occupant;
+  const base = occ?.plant.segments[0];
+  if (!base) return p;
+  return toPlotSpace(p, { x: base.x0, y: base.y0 }, bedDepth(plotIndex));
+};
 
 /** The plot a seed drag would land in, or null. Shared by the ring and the hint text. */
 function dropTarget(): number | null {
@@ -984,10 +1020,35 @@ function frame(): void {
     ctx.restore();
   }
 
-  for (const plot of garden.plots) {
-    if (plot.occupant) paintSwaying(plot.occupant);
+  // Furthest plot first, so a nearer plant paints OVER a further one. Without an order two
+  // overlapping plants interleave by array position and neither reads as being in front — which
+  // is what the bed did before it had any depth at all.
+  for (const i of paintOrder(garden.plots.length)) {
+    const occ = garden.plots[i]?.occupant;
+    if (occ) paintSwaying(occ, i);
   }
   paintSoil(ctx, W, H, SOIL);
+
+  // Contact shadows go on top of the SOIL, which is why they are here and not with the plants.
+  //
+  // Drawn before the plants they were invisible: `paintSoil` runs last so a stem's flat base is
+  // buried in the ground rather than stopping in mid-air, and it painted straight over every
+  // shadow. Measured 0.5 units of darkening under a stem against 0.4 without them — which is
+  // to say the feature was doing nothing at all.
+  //
+  // A separate pass rather than one per plant inside the loop above: each would otherwise land
+  // on top of the plant drawn before it, so a nearer plant's shadow would sit over a further
+  // plant's stem. Same reason the bloom halos are their own pass.
+  for (const i of paintOrder(garden.plots.length)) {
+    const occ = garden.plots[i]?.occupant;
+    const b = occ?.plant.segments[0];
+    if (!occ || !b) continue;
+    const d = bedDepth(i);
+    ctx.save();
+    ctx.globalAlpha = d.alpha;
+    paintContactShadow(ctx, b.x0, b.y0 + d.dy, b.w0 * d.scale);
+    ctx.restore();
+  }
 
   // AFTER the soil, not before. Drawn first, every divot was painted over by the soil band
   // and the empty plots looked identical to bare ground — so the one affordance telling the
@@ -1017,7 +1078,7 @@ function frame(): void {
   }
 
   // Affordance: ring whatever the pointer could act on right now.
-  const hover = drag ? null : bloomAt(garden, pointer, now);
+  const hover = drag ? null : bloomAt(garden, pointer, now, 1.15, localToPlot);
   if (hover) paintHalo(hover.bloom.center, hover.bloom.radius * 1.25, 0.5);
 
   for (const [i, seed] of garden.tray.entries()) {
@@ -1053,7 +1114,7 @@ function frame(): void {
           garden.plots[plot]!.occupant ? RING_REPLACE : RING_PLANT,
         );
     } else {
-      const onto = bloomAt(garden, pointer, now);
+      const onto = bloomAt(garden, pointer, now, 1.15, localToPlot);
       if (onto && onto.plotIndex !== drag.plotIndex)
         paintHalo(onto.bloom.center, onto.bloom.radius * 1.3, 0.85);
     }
@@ -1236,17 +1297,26 @@ Object.assign(window as unknown as Record<string, unknown>, {
     /** Plants mid-flight between the bed and the background. */
     receding: receding.length,
   }),
-  /** Canvas-space centres of every flower currently on screen. */
+  /**
+   * Canvas-space centres of every flower currently on screen — where they are DRAWN.
+   *
+   * Plants are painted through a depth transform, so a flower's position in its own plant's
+   * coordinates is not where it appears. Every driver uses this to aim a pointer at a real
+   * flower; returning untransformed coordinates made them click at where flowers used to be,
+   * and the resulting failures read as "no seed was taken" rather than as "the hook is lying".
+   */
   __blooms: () =>
-    garden.plots.flatMap((plot, plotIndex) =>
-      plot.occupant
-        ? bloomsOf(plot.occupant, now).map((b) => ({
-            plotIndex,
-            x: b.center.x,
-            y: b.center.y,
-          }))
-        : [],
-    ),
+    garden.plots.flatMap((plot, plotIndex) => {
+      const occ = plot.occupant;
+      if (!occ) return [];
+      const base = occ.plant.segments[0];
+      const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
+      const d = bedDepth(plotIndex);
+      return bloomsOf(occ, now).map((b) => {
+        const at = toCanvasSpace(b.center, anchor, d);
+        return { plotIndex, x: at.x, y: at.y };
+      });
+    }),
   /** Serialized genomes, for asserting a save round-tripped the actual plants. */
   __codes: () => ({
     plots: garden.plots.map((p) =>
@@ -1287,6 +1357,75 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __forestDepth: () => forest.depth,
   /** Cumulative retirements, without the buffer readback `__state()` costs. */
   __retiredTotal: () => garden.retiredTotal,
+  /**
+   * Plant the tray's first seed straight into a plot.
+   *
+   * For the depth measurement, which needs every plot holding the SAME genome so that any
+   * visual difference between plants is the renderer talking about position rather than about
+   * genetics. Driving the pointer for that would only add ways for a measurement of PIXELS to
+   * fail for reasons that are not about pixels.
+   */
+  __plantInto: (plot: number) => {
+    const seed = garden.tray[0];
+    if (!seed) return false;
+    garden = plantSeed(garden, seed.id, plot, SOIL, now);
+    return true;
+  },
+  /**
+   * Each occupied plot's drawn bounding box, in canvas coordinates.
+   *
+   * For measuring the render rather than the model: "is there any depth cue between these two
+   * plants" is a question about pixels, and pixels have to be attributed to a plant somehow.
+   */
+  __plantBoxes: () =>
+    garden.plots
+      .map((p, i) => {
+        const occ = p.occupant;
+        if (!occ) return null;
+        const age = now - occ.plantedAt;
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const sg of occ.plant.segments) {
+          if (sg.tick > age) continue;
+          minX = Math.min(minX, sg.x0, sg.x1);
+          maxX = Math.max(maxX, sg.x0, sg.x1);
+          minY = Math.min(minY, sg.y0, sg.y1);
+          maxY = Math.max(maxY, sg.y0, sg.y1);
+        }
+        for (const b of occ.plant.blooms) {
+          if (b.tick > age) continue;
+          minX = Math.min(minX, b.center.x - b.radius);
+          maxX = Math.max(maxX, b.center.x + b.radius);
+          minY = Math.min(minY, b.center.y - b.radius);
+          maxY = Math.max(maxY, b.center.y + b.radius);
+        }
+        if (minX === Infinity) return null;
+        // Returned in DRAWN coordinates, not the plant's own.
+        //
+        // The plant is painted through the depth transform, so its untransformed bounds are
+        // the wrong place to look for its pixels — and the error grows with depth, which is
+        // precisely the variable under study. Measured that way, "drawn size versus depth"
+        // came out at +0.6: further plants appeared LARGER, because their boxes were too big
+        // and swept in more background.
+        const base = occ.plant.segments[0];
+        const d = bedDepth(i);
+        const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
+        const a = toCanvasSpace({ x: minX, y: minY }, anchor, d);
+        const b = toCanvasSpace({ x: maxX, y: maxY }, anchor, d);
+        return {
+          plot: i,
+          depth: d.depth,
+          minX: a.x,
+          maxX: b.x,
+          minY: a.y,
+          maxY: b.y,
+          baseX: anchor.x,
+          baseY: anchor.y + d.dy,
+        };
+      })
+      .filter(Boolean),
   /** What the notebook has filed, and what it concludes — for driving the carrier discovery. */
   __notebook: () => ({
     crosses: notebook.crosses.length,
@@ -1303,7 +1442,14 @@ Object.assign(window as unknown as Record<string, unknown>, {
     const occ = garden.plots[i]?.occupant;
     if (!occ) return null;
     const s = occ.plant.segments[Math.min(3, occ.plant.segments.length - 1)];
-    return s ? { x: s.x0, y: s.y0 } : null;
+    const base = occ.plant.segments[0];
+    if (!s || !base) return null;
+    // Drawn coordinates, for the same reason as `__blooms`.
+    return toCanvasSpace(
+      { x: s.x0, y: s.y0 },
+      { x: base.x0, y: base.y0 },
+      bedDepth(i),
+    );
   },
   __hint: () => hintEl.textContent,
 });

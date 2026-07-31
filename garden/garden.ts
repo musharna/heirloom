@@ -32,6 +32,15 @@ import { SAVE_KEY, fromSave, toSave, type ReplayEntry } from "../src/game/save";
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
+import {
+  RECEDE_TICKS,
+  applyPlacement,
+  applySway,
+  lerpPlacement,
+  swayAt,
+} from "../src/render/motion";
+import { placeRetired, type Placement } from "../src/render/forest";
+import { express } from "../src/genome/express";
 import { mulberry32 } from "../src/rng";
 import {
   PALETTE,
@@ -39,7 +48,7 @@ import {
   paintSoil,
   paintStage,
 } from "../src/render/stage";
-import type { Vec2 } from "../src/types";
+import type { Plant, Vec2 } from "../src/types";
 
 /** Ticks per frame. Unhurried without being tedious. */
 const SPEED = 1.4;
@@ -201,6 +210,19 @@ let now = 0;
 let forest = new Forest(W, H, dpr);
 let composited = 0;
 
+/**
+ * Plants on their way from the bed into the background.
+ *
+ * They are still drawn live — and still cost a full redraw — for the length of the animation,
+ * which is why the list is drained as soon as each one lands rather than kept around.
+ */
+let receding: {
+  plant: Plant;
+  key: number;
+  place: Placement;
+  start: number;
+}[] = [];
+
 // Rebuild the background from the replay list rather than from a stored image (§7). Genomes
 // are re-expressed and re-grown, which is what lets a saved garden survive a change to the
 // growth engine or the renderer — a stored bitmap would pin every past plant to the code that
@@ -270,8 +292,7 @@ function relayout(): void {
     retired: [...garden.retired, ...surplus],
   };
 
-  // The buffer is the wrong size now. Rebuild it from the durable log; `composited` is left
-  // alone, so the frame loop still composites the surplus and appends it to the log itself.
+  // The buffer is the wrong size now. Rebuild it from the durable log.
   forest = new Forest(W, H, dpr);
   for (const entry of retirementLog) {
     const g = parseGenome(entry.g);
@@ -281,6 +302,29 @@ function relayout(): void {
       genomeSeed(g.genome),
     );
   }
+
+  // Surplus plants are composited IMMEDIATELY rather than being left to the recede animation.
+  //
+  // A recede is the answer to the player replacing a plant — it shows where the old one went.
+  // A rotation is not that: the world got narrower and some plants no longer have a plot. There
+  // is nothing to show the player about it, and easing them back would leave the background
+  // measurably empty for the length of the animation, which is what a driver caught: rotating
+  // to portrait reported `coverage 0` where a rebuilt background should have had two plants
+  // in it.
+  for (const s of surplus) {
+    forest.retire(s.plant, genomeSeed(s.genome));
+    retirementLog.push({
+      g: serialize(s.genome),
+      x: s.plant.segments[0]?.x0 ?? W / 2,
+    });
+  }
+  // Everything in `retired` is now pixels, so the frame loop must not process any of it again.
+  composited = garden.retired.length;
+  // Anything that WAS mid-recede belonged to a world that no longer exists: its reserved
+  // placement was computed against the old width and the buffer it was heading for has just
+  // been replaced. It is already in `retirementLog`, so the rebuild above drew it in the new
+  // world at its proper place.
+  receding = [];
   // The bed just changed shape, so a plot index no longer means the same plant — and the
   // surplus plants that just retired may include the one whose card is open. Closing is the
   // honest response; repositioning would leave a card describing a plant that is now in the
@@ -751,6 +795,31 @@ function recordGrownPlants(): void {
   }
 }
 
+/**
+ * Draw a living plant, bending.
+ *
+ * The sway is a canvas transform wrapped around the ordinary paint call, so `paintPlant` knows
+ * nothing about it and every part of the plant — stems, leaves, flowers, and the gradients
+ * inside them — bends together for the cost of one matrix. It also means the plant a
+ * retirement composites into the background is the RESTING one: `forest.retire` calls
+ * `paintPlant` directly, so a plant cannot be frozen into the picture mid-lean.
+ *
+ * Stiffness comes from the phenotype, so a weeping plant moves like one.
+ */
+function paintSwaying(occ: Garden["plots"][number]["occupant"]): void {
+  if (!occ) return;
+  const base = occ.plant.segments[0];
+  const k = base
+    ? swayAt(now, genomeSeed(occ.genome), base.x0, W, {
+        stiffness: express(occ.genome).stiffness,
+      })
+    : 0;
+  ctx.save();
+  if (base) applySway(ctx, k, base.y0);
+  paintPlant(ctx, occ.plant, now - occ.plantedAt);
+  ctx.restore();
+}
+
 /** The plot a seed drag would land in, or null. Shared by the ring and the hint text. */
 function dropTarget(): number | null {
   if (drag?.kind !== "seed") return null;
@@ -761,9 +830,20 @@ function dropTarget(): number | null {
 function frame(): void {
   // Composite anything newly retired before drawing, so a replaced plant appears in the
   // background on the same frame it leaves the bed rather than blinking out of existence.
+  // A replaced plant RECEDES into the background rather than cutting to it.
+  //
+  // The placement is reserved here, as the plant leaves the bed, not when it finally lands:
+  // several plants can be receding at once, so the layer index the buffer would compute at
+  // composite time is not the one this plant is easing toward.
   while (composited < garden.retired.length) {
     const gone = garden.retired[composited]!;
-    forest.retire(gone.plant, genomeSeed(gone.genome));
+    const key = genomeSeed(gone.genome);
+    receding.push({
+      plant: gone.plant,
+      key,
+      place: placeRetired(key, forest.depth + receding.length, W),
+      start: now,
+    });
     retirementLog.push({
       g: serialize(gone.genome),
       x: gone.plant.segments[0]?.x0 ?? W / 2,
@@ -772,14 +852,35 @@ function frame(): void {
     scheduleSave();
   }
 
+  // Anything that has finished receding becomes pixels and stops costing a redraw.
+  receding = receding.filter((r) => {
+    if (now - r.start < RECEDE_TICKS) return true;
+    forest.retire(r.plant, r.key, r.place);
+    return false;
+  });
+
   recordGrownPlants();
 
   paintStage(ctx, W, H, SOIL);
   forest.draw(ctx);
 
+  // Between the background and the bed, which is exactly where a plant on its way from one to
+  // the other belongs.
+  for (const r of receding) {
+    const origin = r.plant.segments[0];
+    if (!origin) continue;
+    ctx.save();
+    applyPlacement(
+      ctx,
+      { x: origin.x0, y: origin.y0 },
+      lerpPlacement(r.place, (now - r.start) / RECEDE_TICKS),
+    );
+    paintPlant(ctx, r.plant);
+    ctx.restore();
+  }
+
   for (const plot of garden.plots) {
-    if (plot.occupant)
-      paintPlant(ctx, plot.occupant.plant, now - plot.occupant.plantedAt);
+    if (plot.occupant) paintSwaying(plot.occupant);
   }
   paintSoil(ctx, W, H, SOIL);
 
@@ -1027,6 +1128,8 @@ Object.assign(window as unknown as Record<string, unknown>, {
       .filter((i) => i >= 0),
     forestDepth: forest.depth,
     forestCoverage: forest.coverage(),
+    /** Plants mid-flight between the bed and the background. */
+    receding: receding.length,
   }),
   /** Canvas-space centres of every flower currently on screen. */
   __blooms: () =>

@@ -270,4 +270,23 @@ describe("plain language", () => {
     expect(shortLabel(code({ ...FLAT, W: ["W", "W"] }))).toBe("white");
     expect(shortLabel("garbage")).toMatch(/unknown/);
   });
+
+  it("never names a colour for a plant that will not flower", () => {
+    // The card was headed "crimson raceme" directly above "albino — it will not flower". Both
+    // lines were individually correct and together they were nonsense.
+    const albino = code({
+      ...FLAT,
+      L: ["l", "l"],
+      H1: ["H1", "H1"],
+      I: ["I^r", "I^r"],
+    });
+    expect(shortLabel(albino)).toBe("albino seedling");
+    expect(shortLabel(albino)).not.toMatch(/crimson|coral|raceme|umbel|spike/);
+  });
+
+  it("CONTROL: a viable plant of the same colour IS named by it", () => {
+    // Pins that the branch above is scoped to albinos rather than flattening every label.
+    const alive = code({ ...FLAT, H1: ["H1", "H1"], I: ["I^r", "I^r"] });
+    expect(shortLabel(alive)).toMatch(/raceme/);
+  });
 });

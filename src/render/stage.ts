@@ -7,6 +7,7 @@ import {
   smoothChain,
 } from "./strokes";
 import { leafMidrib, leafPath, leafVeins } from "./leaves";
+import { ease } from "./motion";
 import {
   fillPetal,
   petalColor,
@@ -251,11 +252,26 @@ export function soilLine(h: number): number {
   return h - Math.max(10, h * 0.045);
 }
 
+/** Ticks a flower takes to open once its shoot has finished. */
+const OPEN_TICKS = 26;
+
 export function paintPlant(
   ctx: CanvasRenderingContext2D,
   plant: Plant,
   untilTick = Infinity,
 ): void {
+  /**
+   * How far open a flower is, from how long ago its shoot terminated.
+   *
+   * Flowers used to switch on at full size the instant their tick arrived, which read as a
+   * plant acquiring decorations rather than coming into flower. `Infinity` — the default, and
+   * what the background buffer composites with — gives 1, so a retired plant is never frozen
+   * half-open.
+   */
+  const opening = (tick: number): number => {
+    const age = untilTick - tick;
+    return age >= OPEN_TICKS ? 1 : 0.32 + 0.68 * ease(Math.max(0, age) / OPEN_TICKS);
+  };
   // Stems first, deepest chains behind. Each carries an ink contour: the art direction
   // applies to stems as well as petals, and previously only petals were outlined.
   const chains = groupChains(visibleSegments(plant, untilTick));
@@ -376,6 +392,8 @@ export function paintPlant(
   // 20-deep "string of beads" draped across the canopy. Culling also opens the canopy so
   // branch geometry behind it becomes visible.
   // Also gated by tick, so flowers appear as their shoots finish rather than all at once.
+  // Culling uses each bloom's FULL radius, not its opening one, so the set of flowers on
+  // screen is decided once and does not flicker as they open.
   const blooms = cullOccludedBlooms(
     plant.blooms.filter((b) => b.tick <= untilTick),
   );
@@ -384,7 +402,7 @@ export function paintPlant(
   // pixel area equalled up to 100% of the drawn plant, roughly 20:1 against the 1px rim —
   // so the eye read bloom-haze instead of linework, and every contour fix drowned in it.
   for (const b of blooms) {
-    const r = b.radius * 1.15;
+    const r = b.radius * 1.15 * opening(b.tick);
     const halo = ctx.createRadialGradient(
       b.center.x,
       b.center.y,
@@ -401,7 +419,7 @@ export function paintPlant(
     ctx.fill();
   }
 
-  // Per-bloom foreshortening transform, shared by the petal and centre passes.
+  // Per-bloom transform, shared by the petal and centre passes.
   const withBloomTransform = (
     b: (typeof plant.blooms)[number],
     draw: () => void,
@@ -411,8 +429,9 @@ export function paintPlant(
     // squash it across the shoot axis. Without this every bloom faced the viewer dead-on
     // and a weeping plant's flowers read as merely positioned low, not as pendant.
     const squash = 1 - 0.45 * b.tilt;
+    const o = opening(b.tick);
     ctx.translate(b.center.x, b.center.y);
-    ctx.scale(1, squash);
+    ctx.scale(o, o * squash);
     ctx.translate(-b.center.x, -b.center.y);
     draw();
     ctx.restore();

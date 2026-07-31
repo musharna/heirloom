@@ -137,8 +137,11 @@ check('holding a plant opens its card', text !== null, text ? 'open' : 'no card'
 check('holding a plant does NOT also take a seed from it',
   (await state()).tray === trayBeforeHold,
   `tray ${trayBeforeHold} -> ${(await state()).tray}`);
+// "petals" OR "albino": a seedling that never flowers has no petals to describe, and the card
+// correctly says so instead. Demanding petals asserted that every plant flowers, which stopped
+// being true the moment albinism existed.
 check('the card describes what the plant SHOWS',
-  text !== null && /petals/.test(text), text ?? '');
+  text !== null && /(petals|albino)/.test(text), text ?? '');
 check('the card names where the plant came from',
   text !== null && /(self-crossed|cross|cutting|founder)/.test(text), text ?? '');
 

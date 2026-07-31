@@ -216,6 +216,39 @@ describe("express", () => {
     }
   });
 
+  it("makes a many-flowered plant pay for it in flower SIZE", () => {
+    // The balance that stops open-ended breeding from having a single right answer. Without
+    // it, a twelve-flowered raceme of full-size blooms is strictly better than everything
+    // else, every player converges on it, and the game is over.
+    //
+    // Same genome apart from the one locus, so this is the trade and nothing else. It survived
+    // a first mutation pass — removing the penalty entirely left every other test green — and
+    // that is how a design decision quietly becomes a comment describing code that no longer
+    // does it.
+    const solitary = express({ ...BASE, I: ["i", "i"] }).bloomRadius;
+    for (const [allele, name] of [
+      ["I^r", "raceme"],
+      ["I^s", "spike"],
+      ["I^u", "umbel"],
+    ] as const) {
+      const clustered = express({ ...BASE, I: [allele, allele] }).bloomRadius;
+      expect(clustered, name).toBeLessThan(solitary * 0.8);
+      // ...and not so small it stops being a flower. An unbounded penalty would satisfy the
+      // assertion above by shrinking every floret to nothing.
+      expect(clustered, name).toBeGreaterThan(solitary * 0.5);
+    }
+  });
+
+  it("orders the penalty by how many flowers the architecture carries", () => {
+    // An umbel opens every floret at one point simultaneously, so it pays most; a raceme
+    // spreads its flowers along the shoot and over time, so it pays least. A flat penalty
+    // would pass the test above while making the three architectures interchangeable.
+    const r = (a: "I^r" | "I^s" | "I^u") =>
+      express({ ...BASE, I: [a, a] }).bloomRadius;
+    expect(r("I^u")).toBeLessThan(r("I^s"));
+    expect(r("I^s")).toBeLessThan(r("I^r"));
+  });
+
   it("CONTROL: a solitary flower still lands in the milestone-1 band", () => {
     // Pins that the branch above discriminates. If the size trade were ever applied to
     // solitary flowers too, the assertion would go slack and nothing else would notice.

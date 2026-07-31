@@ -51,16 +51,33 @@ const segLength = (s: StrokeSegment): number =>
  * exactly one segment, where a shoot accumulates many. Measuring them directly is the only
  * way to test the difference between a raceme and a spike, which is ENTIRELY stalk length.
  */
-function pedicelLengths(plant: Plant): number[] {
+function pedicels(plant: Plant): StrokeSegment[] {
   const byChain = new Map<number, StrokeSegment[]>();
   for (const s of plant.segments) {
     const list = byChain.get(s.chain);
     if (list) list.push(s);
     else byChain.set(s.chain, [s]);
   }
-  return [...byChain.values()]
-    .filter((c) => c.length === 1)
-    .map((c) => segLength(c[0]!));
+  return [...byChain.values()].filter((c) => c.length === 1).map((c) => c[0]!);
+}
+
+function pedicelLengths(plant: Plant): number[] {
+  return pedicels(plant).map(segLength);
+}
+
+/**
+ * Flowers borne on the SIDE of a shoot, as opposed to at its tip.
+ *
+ * A lateral sits at the far end of a pedicel; a raceme's terminal flower sits directly on the
+ * growing point with no stalk. Separating them matters more than it looks: a terminal is
+ * always a bud and always at the top of the plant, so any statistic taken over all blooms
+ * quietly inherits that fact and can report a gradient the laterals do not actually have.
+ */
+function lateralBlooms(plant: Plant): Plant["blooms"] {
+  const ends = pedicels(plant);
+  return plant.blooms.filter((b) =>
+    ends.some((s) => Math.hypot(s.x1 - b.center.x, s.y1 - b.center.y) < 0.001),
+  );
 }
 
 const median = (xs: number[]): number => {
@@ -135,25 +152,42 @@ describe("inflorescence architecture changes the SILHOUETTE", () => {
     expect(racemeR).toBeGreaterThan(0.8);
   });
 
-  it("ripens a raceme from the bottom up", () => {
-    // A raceme's signature is open flowers below and buds at the tip, because the bottom
-    // flower is the oldest. Bloom radius scales with how far a flower has opened, so a
-    // correctly-ripening raceme has larger flowers lower down.
+  it("ripens a raceme from the bottom up — among the LATERAL flowers", () => {
+    // A raceme's signature is open flowers below and tight buds above, because the bottom
+    // flower is the oldest. Bloom radius scales with openness, so a correctly-ripening raceme
+    // has larger flowers lower down. Screen coordinates: y grows DOWNWARD, so lower = larger y.
     //
-    // Screen coordinates: y grows DOWNWARD, so "lower on the plant" is larger y.
+    // Restricted to laterals, and that restriction is the whole point. The first version of
+    // this test measured every bloom on the plant and PASSED with the ripeness gradient
+    // deleted — because a raceme's terminal flower is always a bud and always sits at the top,
+    // which produces a top-to-bottom size difference all on its own. It was measuring "the tip
+    // is a bud", a property one line away from the one it claimed to check. Found by mutation,
+    // not by reading it again.
     const lowerAreBigger = (plant: Plant): number => {
-      const bs = plant.blooms;
+      const bs = lateralBlooms(plant);
       if (bs.length < 6) return 0;
       const sorted = [...bs].sort((a, b) => a.center.y - b.center.y);
-      const top = sorted.slice(0, Math.floor(sorted.length / 3));
-      const bottom = sorted.slice(-Math.floor(sorted.length / 3));
+      const third = Math.floor(sorted.length / 3);
       const avg = (xs: typeof bs) =>
         xs.reduce((a, b) => a + b.radius, 0) / xs.length;
-      return avg(bottom) - avg(top);
+      return avg(sorted.slice(-third)) - avg(sorted.slice(0, third));
     };
+    // Low branchiness: on a heavily branched plant a side shoot's young flowers can hang below
+    // the main stem's old ones, which scrambles height as a proxy for age. That is real and
+    // correct behaviour, so the test sidesteps the confound rather than the code doing so.
     expect(
-      meanOver({ inflorescence: "raceme" }, lowerAreBigger),
-    ).toBeGreaterThan(0.6);
+      meanOver({ inflorescence: "raceme", branchiness: 0.08 }, lowerAreBigger),
+    ).toBeGreaterThan(1.2);
+  });
+
+  it("CONTROL: the lateral/terminal split is real, not an empty set", () => {
+    // The measurement above returns 0 — and asserts nothing — if `lateralBlooms` comes back
+    // near-empty, which is exactly what a broken matcher would do. Both groups have to be
+    // non-empty for the restriction to carry any weight.
+    const plant = grow({ inflorescence: "raceme", branchiness: 0.08 });
+    const lateral = lateralBlooms(plant);
+    expect(lateral.length).toBeGreaterThan(5);
+    expect(plant.blooms.length).toBeGreaterThan(lateral.length);
   });
 
   it("CONTROL: an umbel opens all at once, so it has no such gradient", () => {

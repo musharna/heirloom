@@ -783,3 +783,77 @@ This is the _same defect_, in the same words, that §20 records finding and fixi
 `check-viewports.mjs`. It was left standing in the sibling file. **Fixing a bug in one place is
 not fixing the bug** — the lesson from §20 was written down and did not travel to the file next
 to it.
+
+## 23. Motion — and the frame rate it exposed
+
+Done 2026-07-31. 317 tests, `tsc --noEmit` clean, six drivers pass, 37/37 mutants killed.
+
+The garden held perfectly still between clicks and retirement was a hard cut. It read as a
+diagram of a garden rather than as one.
+
+### Paint-time only, and that is the architecture
+
+§6 makes growth a pure function of the genome so a shared link grows the same plant for
+everyone. Motion that touched `Plant` would either break that or have to be replayed exactly,
+and both are worse than the alternative: nothing in `motion.ts` is ever written back, and a test
+asserts that growth output is byte-identical whatever the clock says.
+
+Sway is an **affine shear anchored at the plant's base** — every point moves sideways in
+proportion to its height above the root. That is one `ctx.transform` for a whole plant, so
+stems, leaves, flowers and the gradients inside them all bend together, and **`paintPlant`
+needed no change at all**. Which in turn means the background composites the resting pose for
+free: `Forest.retire` calls `paintPlant` directly, so a plant cannot be frozen mid-lean.
+
+Amplitude is deliberately small. Hit-testing uses resting coordinates, so every pixel of sway is
+a pixel of disagreement between where a flower is drawn and where it can be clicked.
+
+Per-plant phase comes from the genome hash, so a shared plant sways identically wherever it is
+opened, and two clones move in lockstep — correct, since they are the same plant.
+
+### The frame rate was already broken
+
+Motion is worth nothing at 11 frames per second, and that is what the bed was running at. **The
+problem predated motion**: 9 fps measured on the deployed pre-motion build. §21 multiplied the
+flower count by roughly five and nothing downstream was rebuilt for it.
+
+A pass-by-pass profile settled it rather than a guess: **67% of the paint budget was petals** —
+149 blooms per frame, each rebuilding a gradient per petal, on top of 365 stroke outlines for
+stems and flower stalks.
+
+None of that work changes. Once a plant has finished growing and its last flower has opened, its
+picture is fixed forever, and every frame was re-deriving an identical image. Rendering it once
+into an offscreen canvas turns a plant from thousands of path fills into one `drawImage`.
+**Measured 13 → 60 fps.**
+
+The cache is keyed on the `Plant` object, so nothing has to remember to invalidate it: a re-grown
+plant is a different object and the old entry is collected with the plant it belonged to.
+
+### `ctx.filter` blurs every operation separately
+
+The recede animation cost **765ms per frame**. `applyPlacement` sets `ctx.filter = blur(...)`,
+and a canvas filter forces each subsequent drawing operation into its own layer to be blurred
+independently — so blurring a vector plant blurs several hundred paths one at a time. The garden
+dropped to two frames a second and the animation never completed.
+
+A receding plant has by definition finished growing, so it always has a cached picture. Blurring
+that is one operation.
+
+**And the driver was making it worse.** It polled `__state()` to ask whether the recede had
+finished, and `__state()` reads the whole background buffer back with `getImageData` to report
+coverage. Polling a megapixel readback once per frame starved the very loop it was waiting on:
+asking whether the animation had finished was part of why it had not.
+
+### The trade, stated
+
+A sheared bitmap is softer than sheared vector art. It is invisible at 1× and visible at 4×, so
+`tools/zoom.mjs` now magnifies the blit rather than the linework. The lookdev sheet calls
+`paintPlant` directly and remains the sharp reference for judging render quality.
+
+### What has to be true at both ends of an animation
+
+`lerpPlacement` has to be the exact identity at u = 0 and exactly the reserved placement at
+u = 1. Neither endpoint had a test, and both are visible: the first is a jump on the frame the
+player drops a seed, the second a jump at the handover from the animation to the composited
+buffer. The placement is also **reserved when the plant leaves the bed**, not computed on
+arrival — several plants can be receding at once, so the layer index the buffer would compute
+later is not the one the animation eased toward.

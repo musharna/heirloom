@@ -10,6 +10,10 @@ A modernized [_Seed_](https://www.noio.nl/2007/12/seed/) (noio, 2007), rebuilt f
 original averaged numeric variables to cross two flowers; this keeps the restraint and replaces
 the genetics.
 
+The bed sways, gusts cross it, flowers open as they come out, and a replaced plant recedes into
+the background rather than cutting to it. All of it is paint-time only — growth stays a pure
+function of the genome, so a shared link grows the same plant however long you watch it.
+
 ## Running it
 
 ```sh
@@ -118,7 +122,7 @@ canonical plant and a shared link reproduces it exactly.
 ## Tests
 
 ```sh
-npm test              # 279 unit tests
+npm test              # 317 unit tests
 npx tsc --noEmit
 ```
 
@@ -127,13 +131,14 @@ driver that runs the real thing in a real browser:
 
 ```sh
 npm run dev &     # the drivers drive a real server
-npm run drive     # all five, in order
+npm run drive     # all six, in order
 ```
 
 - `tools/drive-verbs.mjs` — clicks real flowers, asserts the four verbs fire
 - `tools/drive-forest.mjs` — retires plants, reads the background buffer's pixels back
 - `tools/drive-persist.mjs` — builds a garden, reloads the page, asserts it came back
 - `tools/drive-notebook.mjs` — selfs a plant, grows the seedling, reads the card
+- `tools/check-motion.mjs` — asserts the scene moves, the geometry does not, and it runs at 60fps
 - `tools/check-viewports.mjs` — real device viewports; aspect distortion and rotation
 - `npm run shoot` — screenshots the garden into `shots/`
 

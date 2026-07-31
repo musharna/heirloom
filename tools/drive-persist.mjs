@@ -81,9 +81,19 @@ check('built a garden with plants, seeds and a retirement',
   saved.planted > 0 && saved.tray > 0 && saved.retired > 0,
   `planted ${saved.planted}, tray ${saved.tray}, retired ${saved.retired}`);
 
-// Wait past the 700ms save debounce.
-await page.waitForTimeout(1100);
+// Wait for the save to actually CONTAIN the retirement, not for a fixed number of
+// milliseconds. The retirement reaches the replay list on the next frame and the write is
+// debounced behind that, so a fixed sleep is a race — and it lost intermittently once the
+// recede animation put another frame between the drop and the record.
+await page.waitForFunction(() => {
+  const raw = localStorage.getItem('heirloom.garden.v1');
+  if (!raw) return false;
+  try { return (JSON.parse(raw).replay ?? []).length > 0; } catch { return false; }
+}, undefined, { timeout: 8000 }).catch(() => {});
 const stored = await page.evaluate(() => localStorage.getItem('heirloom.garden.v1'));
+const savedReplay = (() => { try { return JSON.parse(stored).replay.length; } catch { return -1; } })();
+check('the retirement reached the saved replay list', savedReplay > 0,
+  `${savedReplay} replay entries`);
 check('a save was written', Boolean(stored) && stored.length > 40,
   `${stored ? stored.length : 0} bytes`);
 
@@ -114,7 +124,7 @@ check('the same seeds came back',
 // fresh garden reads zero. Geometry is check-viewports.mjs's job, not this one's.
 check('the background was rebuilt from the replay list',
   after.forestDepth === saved.retired && after.forestCoverage > 40,
-  `depth ${after.forestDepth} (retired ${saved.retired}), coverage ${after.forestCoverage}`);
+  `depth ${after.forestDepth} (retired ${saved.retired}, saved replay ${savedReplay}), coverage ${after.forestCoverage}`);
 check('no notice was shown — the save loaded cleanly',
   !(await hintText()).includes('rejected'), await hintText());
 

@@ -200,7 +200,15 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       for (let k = 0; k < rays; k++) {
         const ang =
           tip.dir + ((k / (rays - 1) - 0.5) * 2 - 0.06 + 0.12 * rand()) * 0.95;
-        const len = pheno.bloomRadius * (1.35 + 0.6 * rand());
+        // Ray length is set against the FLORET's own radius, and the multiplier is not free:
+        // adjacent florets are separated by roughly `len * angularStep`, and the renderer
+        // culls any bloom sitting closer to another than 0.62 of a radius. At the first
+        // multiplier (1.35–1.95) that arc came out at 5.7px against a 5.8px threshold, so a
+        // third of every umbel's florets were grown and then quietly dropped before being
+        // drawn — the one architecture defined by its flowers touching was the one the culler
+        // ate. Widening the plate fixes it at the geometry rather than by weakening a cull
+        // that solitary flowers still need.
+        const len = pheno.bloomRadius * (1.75 + 0.55 * rand());
         const at = {
           x: tip.pos.x + Math.cos(ang) * len,
           y: tip.pos.y + Math.sin(ang) * len,

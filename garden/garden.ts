@@ -153,7 +153,83 @@ let notebook: Notebook = emptyNotebook();
 let garden: Garden;
 let restored: { genome: Genome; x: number }[] = [];
 
-const stored = localStorage.getItem(SAVE_KEY);
+/**
+ * `#new` starts a fresh garden.
+ *
+ * There was no way to do this at all. The game has no menus by design, the save restores
+ * automatically, and — since the save is now flushed on `pagehide` so a phone user who swipes
+ * the app away keeps their work — clearing storage from the console and reloading did not work
+ * either: the flush fired during the reload and wrote the garden straight back over the clear.
+ * Measured on the live site, that recipe returned the SAME garden. A player had no way to start
+ * over that did not involve knowing all of the above.
+ *
+ * A URL fragment rather than a button, because `#g=` already establishes fragments as this
+ * game's way of doing things that need no UI, and because the alternative is a permanent
+ * "delete everything" control sitting on a screen whose whole design is that it has no
+ * controls.
+ *
+ * It CONFIRMS, and that is not politeness. A fragment travels: paste a link with `#new` on the
+ * end into a chat and every person who opens it loses their garden. The deliberate act of
+ * typing it is not the same as the deliberate act of clicking it, so the second one is asked
+ * for separately.
+ *
+ * Runs before the save is read, so nothing has been loaded to be written back.
+ */
+const WANTS_FRESH = /[#&]new(&|$)/;
+const RESET_PROMPT =
+  "Start a fresh garden?\n\nEverything you have bred — the plants, the seeds, the " +
+  "background and the notebook — is deleted. This cannot be undone.";
+
+/** Drop the fragment, so a refresh does not ask again. */
+function clearFragment(): void {
+  window.history.replaceState(null, "", location.pathname + location.search);
+}
+
+/** Ask, and wipe the save if the answer is yes. Returns whether it was wiped. */
+function confirmAndWipe(): boolean {
+  const ok = window.confirm(RESET_PROMPT);
+  clearFragment();
+  if (!ok) return false;
+  try {
+    localStorage.removeItem(SAVE_KEY);
+  } catch (e) {
+    // Storage can be unavailable. Say so rather than pretending the garden was reset.
+    console.error("[heirloom] could not clear the saved garden:", e);
+    return false;
+  }
+  return true;
+}
+
+function takeFreshStart(): boolean {
+  if (!WANTS_FRESH.test(location.hash)) return false;
+  return confirmAndWipe();
+}
+
+const freshStart = takeFreshStart();
+
+/**
+ * `#new` typed into the address bar of a page that is ALREADY open.
+ *
+ * Which is how a player would actually do it — and it is a same-document navigation, so the
+ * page does not reload and nothing that runs at module init ever sees it. The driver caught
+ * this: from a fresh tab `#new` worked, and from an open garden it did nothing at all, which
+ * is the path a person is far more likely to take.
+ *
+ * Reloading is the honest way to apply it. Saving is suppressed first, because the pagehide
+ * flush would otherwise write the garden back out over the file that was just deleted — the
+ * same trap that made clearing storage from the console useless.
+ */
+window.addEventListener("hashchange", () => {
+  if (!WANTS_FRESH.test(location.hash)) return;
+  if (!confirmAndWipe()) return;
+  suppressSave = true;
+  location.reload();
+});
+
+// The teaching record deliberately SURVIVES a fresh start. Someone asking for a new garden
+// knows how to plant a seed; replaying the first-run lessons at them would be the game failing
+// to notice what they had already done.
+const stored = freshStart ? null : localStorage.getItem(SAVE_KEY);
 if (stored) {
   let parsed: unknown;
   try {
@@ -191,6 +267,7 @@ if (stored) {
     SOIL,
     rand,
   );
+  if (freshStart) notice = "a fresh garden";
 }
 
 /**
@@ -364,6 +441,7 @@ function relayout(): void {
   // been replaced. It is already in `retirementLog`, so the rebuild above drew it in the new
   // world at its proper place.
   receding = [];
+  stageCache = null; // wrong size now
   // The bed just changed shape, so a plot index no longer means the same plant — and the
   // surplus plants that just retired may include the one whose card is open. Closing is the
   // honest response; repositioning would leave a card describing a plant that is now in the
@@ -394,7 +472,11 @@ const SAVE_MAX_WAIT_MS = 5000;
 let saveTimer = 0;
 let savePendingSince = 0;
 
+/** Set when the garden is being deliberately discarded; nothing may write after that. */
+let suppressSave = false;
+
 function writeSave(): void {
+  if (suppressSave) return;
   clearTimeout(saveTimer);
   saveTimer = 0;
   savePendingSince = 0;
@@ -958,6 +1040,36 @@ function dropTarget(): number | null {
  * ~17fps at 6x. Slow, and playable — nothing here is timed or requires aim.
  */
 
+/**
+ * The sky, painted once.
+ *
+ * `paintStage` is three full-canvas operations — a fill, a horizon gradient and a vignette —
+ * and not one pixel of it changes between frames. Repainting it sixty times a second cost
+ * roughly a fifth of the frame rate on a throttled phone: measured 20-26fps before the depth
+ * work added the horizon and 16-19 after, on the same device.
+ *
+ * Same reasoning as the plant cache, and the same shape: if it cannot change, draw it once.
+ * Invalidated only by a relayout, which is the one thing that changes its size.
+ */
+let stageCache: HTMLCanvasElement | null = null;
+function drawStage(): void {
+  if (!stageCache) {
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(W * dpr));
+    c.height = Math.max(1, Math.round(H * dpr));
+    const g = c.getContext("2d");
+    if (!g) {
+      // Fail soft: a missing offscreen context should cost frame rate, not the sky.
+      paintStage(ctx, W, H, SOIL);
+      return;
+    }
+    g.scale(dpr, dpr);
+    paintStage(g, W, H, SOIL);
+    stageCache = c;
+  }
+  ctx.drawImage(stageCache, 0, 0, W, H);
+}
+
 function frame(): void {
   // Composite anything newly retired before drawing, so a replaced plant appears in the
   // background on the same frame it leaves the bed rather than blinking out of existence.
@@ -994,7 +1106,7 @@ function frame(): void {
 
   recordGrownPlants();
 
-  paintStage(ctx, W, H, SOIL);
+  drawStage();
   forest.draw(ctx);
 
   // Between the background and the bed, which is exactly where a plant on its way from one to

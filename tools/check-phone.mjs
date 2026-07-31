@@ -83,7 +83,12 @@ for (const [label, dev, slowdown] of [
   //
   // 4x is roughly a mid-range Android; 6x a cheap one. Nothing here is timed or needs aim, so
   // slow is playable — a regression is not.
-  const floor = slowdown <= 4 ? 16 : 9;
+  //
+  // Raised after the sky was cached. Caching three full-canvas operations that never change
+  // took 4x from 16-19 to 21-26 and 6x from 8-14 to 18-22 — better than before the depth work
+  // that first exposed the cost. Floors sit below the observed minimum of each population
+  // (21.0 and 18.2) with room, so they catch a regression rather than a slow afternoon.
+  const floor = slowdown <= 4 ? 18 : 13;
   check(label, drawnFps > floor,
     `${drawnFps.toFixed(1)} fps (floor ${floor}) · ${info.blooms} flowers · dpr ${info.dpr}${errors.length ? ` · ERR ${errors[0]}` : ''}`);
   if (errors.length) failures++;

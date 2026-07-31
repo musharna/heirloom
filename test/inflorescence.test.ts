@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { growPlant } from "../src/growth/sim";
 import { layoutBloom } from "../src/growth/bloom";
+import { cullOccludedBlooms } from "../src/render/stage";
 import type {
   Inflorescence,
   Phenotype,
@@ -222,6 +223,69 @@ describe("inflorescence architecture changes the SILHOUETTE", () => {
       7,
     );
     expect(plant.blooms.length).toBeLessThanOrEqual(200);
+  });
+});
+
+describe("the flowers that are grown are the flowers that get DRAWN", () => {
+  // Nothing else in this file could see this. Every test above measures what `growPlant`
+  // returns, but the renderer drops any bloom sitting closer to another than 0.62 of a radius
+  // — and an umbel's florets are supposed to touch. A third of every umbel was being grown
+  // and then silently discarded before it reached the screen: the architecture whose entire
+  // identity is clustering was the one the anti-clustering rule ate.
+  //
+  // The fix was geometric (wider rays), not a weakened cull, because solitary flowers still
+  // need the cull. These tests pin the outcome so a later tweak to either side cannot quietly
+  // undo it.
+  const keptFraction = (p: Partial<Phenotype>, seeds = 20): number => {
+    let grown = 0;
+    let shown = 0;
+    for (let s = 0; s < seeds; s++) {
+      const plant = grow(p, 2000 + s * 13);
+      grown += plant.blooms.length;
+      shown += cullOccludedBlooms(plant.blooms).length;
+    }
+    return grown === 0 ? 0 : shown / grown;
+  };
+
+  it("keeps almost every floret of a single umbel", () => {
+    // Branchiness zero isolates ONE flower head, so whatever culling remains is between
+    // florets of the same umbel — the defect — rather than between two heads that overlap,
+    // which is legitimate occlusion and must keep working.
+    const kept = keptFraction({
+      inflorescence: "umbel",
+      branchiness: 0,
+      bloomRadius: BASE.bloomRadius * 0.58,
+    });
+    expect(kept).toBeGreaterThan(0.85);
+  });
+
+  it("CONTROL: two overlapping heads DO still occlude each other", () => {
+    // The counterpart. If the cull had simply been switched off, the assertion above would
+    // read 100% and this one would too — so the test that matters is that a crowded canopy
+    // still loses flowers.
+    const crowded = keptFraction({
+      inflorescence: "umbel",
+      branchiness: 0.8,
+      bloomRadius: BASE.bloomRadius * 0.58,
+    });
+    expect(crowded).toBeLessThan(0.85);
+  });
+
+  it("shows a usable number of flowers for every architecture", () => {
+    // The property the player actually experiences. Stated separately from the ratios above
+    // because a plant could keep 100% of two flowers and satisfy every one of them.
+    for (const arch of ["raceme", "spike", "umbel"] as const) {
+      const trade = { raceme: 0.72, spike: 0.66, umbel: 0.58 }[arch];
+      const plant = grow({
+        inflorescence: arch,
+        bloomRadius: BASE.bloomRadius * trade,
+      });
+      const shown = cullOccludedBlooms(plant.blooms).length;
+      expect(shown, arch).toBeGreaterThan(
+        cullOccludedBlooms(grow({ inflorescence: "solitary" }).blooms).length *
+          2,
+      );
+    }
   });
 });
 

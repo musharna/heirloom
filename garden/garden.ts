@@ -32,6 +32,7 @@ import { SAVE_KEY, fromSave, toSave, type ReplayEntry } from "../src/game/save";
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
+import { paintPlantCached } from "../src/render/cache";
 import {
   RECEDE_TICKS,
   applyPlacement,
@@ -52,6 +53,14 @@ import type { Plant, Vec2 } from "../src/types";
 
 /** Ticks per frame. Unhurried without being tedious. */
 const SPEED = 1.4;
+
+/**
+ * Ticks after a plant's last segment before it is treated as finished.
+ *
+ * Comfortably past OPEN_TICKS, because a flower that was still opening when its image was
+ * cached would stay half-open for as long as the plant stands there.
+ */
+const SETTLE_TICKS = 40;
 
 /**
  * World geometry, from the viewport. Reassignable rather than constant: a phone rotated to
@@ -816,7 +825,15 @@ function paintSwaying(occ: Garden["plots"][number]["occupant"]): void {
     : 0;
   ctx.save();
   if (base) applySway(ctx, k, base.y0);
-  paintPlant(ctx, occ.plant, now - occ.plantedAt);
+  // Cached once the plant has stopped changing. `maxTick` is when the last SEGMENT is drawn;
+  // flowers keep opening for a while after that, so the settle point is later than "grown".
+  paintPlantCached(
+    ctx,
+    occ.plant,
+    now - occ.plantedAt,
+    occ.maxTick + SETTLE_TICKS,
+    dpr,
+  );
   ctx.restore();
 }
 
@@ -875,7 +892,15 @@ function frame(): void {
       { x: origin.x0, y: origin.y0 },
       lerpPlacement(r.place, (now - r.start) / RECEDE_TICKS),
     );
-    paintPlant(ctx, r.plant);
+    // Blur ONE blit, not several hundred path fills.
+    //
+    // `applyPlacement` sets `ctx.filter = blur(...)`, and a canvas filter forces every
+    // subsequent drawing operation into its own layer to be blurred separately. Painting the
+    // plant as vectors under it cost 765ms per frame — measured — which dropped the whole
+    // garden to two frames a second for the length of the animation, and stopped the recede
+    // finishing at all. A receding plant has by definition finished growing, so it always has
+    // a cached picture; blurring that is one operation.
+    paintPlantCached(ctx, r.plant, Infinity, -Infinity, dpr);
     ctx.restore();
   }
 
@@ -1154,6 +1179,18 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __plotX: (i: number) => plotXs[i],
   __soil: SOIL,
   __size: () => ({ w: W, h: H }),
+  /** The garden clock, so a driver can reason about anything measured in ticks. */
+  __now: () => now,
+  /**
+   * Plants mid-flight, on its own so a driver can POLL it.
+   *
+   * `__state()` reads the whole background buffer back with `getImageData` to report coverage,
+   * which costs a megapixel per call. Polling that once per frame starves the very frame loop
+   * the poll is waiting on — the recede never completed because asking whether it had finished
+   * was what stopped it finishing.
+   */
+  __receding: () => receding.length,
+  __forestDepth: () => forest.depth,
   /** What the notebook has filed, and what it concludes — for driving the carrier discovery. */
   __notebook: () => ({
     crosses: notebook.crosses.length,

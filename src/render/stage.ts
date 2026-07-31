@@ -56,6 +56,13 @@ export const PALETTE = {
   stemShade: "rgba(12,24,16,0.26)",
   stemLit: "rgba(206,234,210,0.11)",
   soil: "#1c2021",
+  /**
+   * The far edge of the receding ground band.
+   *
+   * Darker and cooler than the near soil: aerial perspective, and the only thing distinguishing
+   * a plant standing further back from one hovering.
+   */
+  soilFar: "#12171a",
   /** Bottom of the soil gradient — earth falls off with depth rather than reading as a slab. */
   soilDeep: "#101315",
   soilRim: "rgba(150,170,152,0.34)",
@@ -204,6 +211,16 @@ export function paintStage(
  * `soilTop` overrides the default line. The garden needs a deep band with room for the seed
  * tray to rest ON the dirt; the lookdev sheet wants the thin default.
  */
+/**
+ * How far the ground reaches back behind the near crest, in px.
+ *
+ * Matched to the bed's deepest plot: whatever the furthest plant is lifted by, there has to be
+ * ground under it. Set here rather than imported from `bed.ts` because the renderer must not
+ * depend on the game's plot layout — but a test pins the two together, since the failure if
+ * they drift is a plant standing on nothing.
+ */
+export const RECEDE_BAND = 16;
+
 export function paintSoil(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -219,6 +236,31 @@ export function paintSoil(
     2.6 * Math.sin(x * 0.055) +
     1.5 * Math.sin(x * 0.13 + 1.7) +
     0.9 * Math.sin(x * 0.31 + 0.4);
+
+  // GROUND THAT RECEDES, above the near crest.
+  //
+  // The bed lifts a further-back plant to sit higher in frame, which is what distance looks
+  // like — and with the soil's top edge being a single line, that lifted plant's base ended up
+  // ABOVE the ground with a gap beneath it. It read as floating, which is worse than reading
+  // as flat.
+  //
+  // So the surface is a BAND rather than an edge: a strip of receding ground reaching up to
+  // where the furthest plot stands, darkening with distance. Every plant now has ground under
+  // it whatever its depth, and the band is what makes the lift legible as distance rather than
+  // as levitation.
+  const far = soilTop + RECEDE_BAND;
+  const back = ctx.createLinearGradient(0, far, 0, soilTop + 2);
+  back.addColorStop(0, PALETTE.soilFar);
+  back.addColorStop(1, PALETTE.soil);
+  ctx.beginPath();
+  ctx.moveTo(0, soilTop + 3);
+  ctx.lineTo(0, far + 1.5 * Math.sin(0.041));
+  for (let x = 1; x <= w; x++)
+    ctx.lineTo(x, far + 1.5 * Math.sin(x * 0.041) + 0.8 * Math.sin(x * 0.11));
+  ctx.lineTo(w, soilTop + 3);
+  ctx.closePath();
+  ctx.fillStyle = back;
+  ctx.fill();
 
   ctx.beginPath();
   ctx.moveTo(0, h);
@@ -254,6 +296,43 @@ export function soilLine(h: number): number {
 
 /** Ticks a flower takes to open once its shoot has finished. */
 const OPEN_TICKS = 26;
+
+/**
+ * A pool of shadow where a stem meets the soil.
+ *
+ * Measured before this existed: the soil directly under a stem was 0.1 units darker than the
+ * soil beside it — which is to say identical. Every plant was pasted onto the ground rather
+ * than growing out of it, and no amount of work on the plant itself fixes that, because the
+ * missing information is about the CONTACT rather than about the plant.
+ *
+ * Drawn as a soft radial pool rather than a cast shadow: the light is high and diffuse here,
+ * there is no other cast shadow anywhere in the scene, and one plant throwing a hard shadow
+ * while nothing else does would read as an error rather than as light.
+ *
+ * @param width Stem width at the base — a thick trunk sits in a wider pool than a seedling.
+ */
+export function paintContactShadow(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+): void {
+  const rx = Math.max(9, width * 2.6);
+  const ry = Math.max(3, width * 0.85);
+  const g = ctx.createRadialGradient(x, y, 0, x, y, rx);
+  g.addColorStop(0, "rgba(0,0,0,0.55)");
+  g.addColorStop(0.55, "rgba(0,0,0,0.28)");
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(1, ry / rx);
+  ctx.translate(-x, -y);
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, rx, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
 
 export function paintPlant(
   ctx: CanvasRenderingContext2D,

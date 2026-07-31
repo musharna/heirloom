@@ -11,6 +11,7 @@
  */
 import { mkdirSync } from 'node:fs';
 import { chromium } from 'playwright';
+import { gestures } from './gestures.mjs';
 
 const URL = process.env.GARDEN_URL ?? 'http://localhost:5173/garden/';
 mkdirSync('shots', { recursive: true });
@@ -36,22 +37,11 @@ function check(label, ok, detail = '') {
   if (!ok) failures++;
 }
 
-async function click(at) {
-  const p = toPage(at);
-  await page.mouse.move(p.x, p.y);
-  await page.mouse.down();
-  await page.mouse.up();
-  await page.waitForTimeout(70);
-}
-async function drag(from, to) {
-  const a = toPage(from);
-  const b = toPage(to);
-  await page.mouse.move(a.x, a.y);
-  await page.mouse.down();
-  await page.mouse.move(b.x, b.y, { steps: 8 });
-  await page.mouse.up();
-  await page.waitForTimeout(90);
-}
+// Shared gestures. This file was the last one still hand-rolling its own, and it failed the
+// same way all the others did: a press slower than 450ms is a HOLD, which reads the plant
+// instead of taking a seed — so the round retired nothing and the check reported "depth 4"
+// where it wanted 5. Fifth occurrence of one bug in five files.
+const { tap: click, drag } = gestures(page, box, size);
 
 await page.evaluate(() => window.__seek(600));
 await page.waitForTimeout(300);

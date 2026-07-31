@@ -27,18 +27,30 @@ export function shownBlooms(p: Planting, now: number): Bloom[] {
  * the first match is whichever plot happens to come first in the array, which makes clicking
  * a crowded bed feel arbitrary.
  */
+/**
+ * Maps a canvas point into one plot's own space.
+ *
+ * Passed in rather than imported so hit-testing stays free of the renderer. Plots are drawn at
+ * different DEPTHS — scaled about their base and lifted — and at the far end that is a 14%
+ * shrink and a 13px rise, several times a flower's click slack. Without the inverse, clicking
+ * a flower where it appears would miss it entirely, which is worse than having no depth.
+ */
+export type ToPlotSpace = (plotIndex: number, p: Vec2) => Vec2;
+
 export function bloomAt(
   g: Garden,
   p: Vec2,
   now: number,
   slack = 1.15,
+  toLocal?: ToPlotSpace,
 ): BloomHit | null {
   let best: BloomHit | null = null;
   let bestD = Infinity;
   g.plots.forEach((plot, plotIndex) => {
     if (!plot.occupant) return;
+    const q = toLocal ? toLocal(plotIndex, p) : p;
     for (const bloom of shownBlooms(plot.occupant, now)) {
-      const d = Math.hypot(bloom.center.x - p.x, bloom.center.y - p.y);
+      const d = Math.hypot(bloom.center.x - q.x, bloom.center.y - q.y);
       if (d <= bloom.radius * slack && d < bestD) {
         bestD = d;
         best = { plotIndex, bloom };

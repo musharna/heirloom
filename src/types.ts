@@ -30,6 +30,15 @@ export type Phenotype = {
   petalShape: PetalShape;
   petalCount: number; // petals per whorl on a single flower
   inflorescence: Inflorescence;
+  /**
+   * Reference size for foliage, in px.
+   *
+   * Separate from `bloomRadius` because a clustered architecture shrinks its FLOWERS and not
+   * its leaves — an umbel-bearing plant has ordinary leaves and many small florets. Sizing
+   * leaves off bloomRadius made every clustered plant grow 40% smaller foliage as a side
+   * effect, so the flower mass swamped the plant and it read as a blob on a stick.
+   */
+  leafScale: number;
   hueClass: 0 | 1 | 2 | 3 | 4;
   white: boolean; // pigment block expressed
   bloomRadius: number; // px

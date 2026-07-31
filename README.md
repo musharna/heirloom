@@ -49,6 +49,21 @@ whatever hue it carries — dosage steps, continuous drift through the polygenic
 
 Traits are never disclosed before bloom. Growing the plant _is_ the reveal.
 
+### The field notebook
+
+Press and hold a plant to read it. The card shows what the plant is showing, where it came
+from, and — this is the point — **what you have proved it must be carrying**.
+
+It never prints a genotype. A carrier is _defined_ by being indistinguishable, so handing over
+`Ll` for free would delete the most interesting locus in the game. Instead the notebook records
+what you crossed and what grew, and derives only what follows: a child more recessive than its
+parent proves the parent carries something hidden. An albino seedling convicts **both** its
+parents. Every claim carries its evidence count.
+
+Which is why **selfing** exists — drag a flower onto its own plant. A carrier selfed throws the
+recessive in a quarter of its seedlings, and no other move reveals as much. A clone cannot do
+it at all, being genetically its parent, and the card says so.
+
 ### Linkage
 
 The discrete loci do not assort independently. They sit on a map, and a gamete is made by
@@ -103,7 +118,7 @@ canonical plant and a shared link reproduces it exactly.
 ## Tests
 
 ```sh
-npm test              # 254 unit tests
+npm test              # 279 unit tests
 npx tsc --noEmit
 ```
 
@@ -112,12 +127,13 @@ driver that runs the real thing in a real browser:
 
 ```sh
 npm run dev &     # the drivers drive a real server
-npm run drive     # all four, in order
+npm run drive     # all five, in order
 ```
 
 - `tools/drive-verbs.mjs` — clicks real flowers, asserts the four verbs fire
 - `tools/drive-forest.mjs` — retires plants, reads the background buffer's pixels back
 - `tools/drive-persist.mjs` — builds a garden, reloads the page, asserts it came back
+- `tools/drive-notebook.mjs` — selfs a plant, grows the seedling, reads the card
 - `tools/check-viewports.mjs` — real device viewports; aspect distortion and rotation
 - `npm run shoot` — screenshots the garden into `shots/`
 

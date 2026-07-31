@@ -472,13 +472,15 @@ driver's job is the reload path.
 All five milestones are built. What the original had and this now also has: click-to-clone,
 drag-to-crossbreed, seeds as objects, an accumulating background, a shareable genome string, and
 endless pressure-free drift. What it adds: a real Mendelian gene model with dominance, an allele
-series, dosage and epistasis, in place of averaged numbers.
+series, dosage and epistasis, in place of averaged numbers — extended in §21 with inflorescence
+architecture, merosity, linkage and a recessive lethal.
 
 Residual visual backlog remains as recorded in §13 — stem outline jitter, back-row petal shape,
 sparse and identical leaf stamps, and colour that is vivid rather than muted-saturated.
 
 > **Superseded.** §19 re-measured this backlog and retracted two of its five entries as
-> already-fixed; §20 records the responsive-layout work that followed. Read those first.
+> already-fixed; §20 records the responsive-layout work and §21 the deeper genetics. Read those
+> first.
 
 ## 19. Visual pass — and a retracted backlog
 
@@ -599,3 +601,97 @@ scored a file that no longer resembled the one under test. Both were invisible b
 The rules that came out of it: **commit before mutating**, verify each revert with
 `git diff --quiet`, and require a sentinel line proving the harness actually RAN before trusting
 any "0 failures" count. All five layout mutants were killed once the harness was real.
+
+## 21. Deeper genetics — architecture, merosity, linkage and a lethal
+
+Done 2026-07-30. 254 tests, `tsc --noEmit` clean, all four drivers pass, 19/19 mutants killed.
+
+§12 flagged eight loci as possibly too few. The sharper version of that complaint: the genetics
+were already deeper than the original's, but the _plants_ were not. Every flower was solitary,
+five-petalled and alive, so two plants differing at four loci could still be told apart only by
+colour — and colour is the first thing to go when a plant is a thumbnail in the background
+forest.
+
+### The three new loci
+
+- **`I`, inflorescence** — umbel > raceme > spike > solitary. Flowers now sit _along_ a shoot or
+  clustered at its tip, not only at terminals. Arrangement is what a person reads first about a
+  plant and it survives being shrunk; this is the locus that earns the milestone.
+- **`N`, petal count** — 12 > 8 > 6 > 5, an allele series rather than a polygenic dial. Merosity
+  in real flowers is discrete and heritable, and a discrete series is also the only version a
+  player can count. A polygenic petal count lands on 6.4 and reads as noise.
+- **`L`, chlorophyll** — `ll` seedlings come up albino and die. This is the only locus that makes
+  CARRIERS matter: every other gene shows what it is, but `Ll` is indistinguishable from `LL`,
+  so the sole evidence is a quarter of a self-cross coming up dead. That is the inference Mendel
+  had to make, and nothing else in the game asks for it.
+
+Founders are filtered so `ll` never appears at generation zero. That is ascertainment, not a
+fudge — a founder collection is a collection of plants that _grew_.
+
+### Linkage: making a goal cost something
+
+`inherit` no longer assorts freely. Each discrete locus sits on a chromosome, and a gamete is
+made by walking it and switching homolog at each interval with that interval's recombination
+fraction. Independent assortment is `r = 0.5`, so the old behaviour is _contained_ in the new
+model rather than replaced by it.
+
+The reason is that free assortment has no hard crosses. Any combination is reachable in two
+generations, so nothing is ever a project. With `D`–`N` tight at 0.06, a parent carrying doubling
+on one homolog and twelve petals on the other needs a crossover to pass both, and about one
+gamete in seventeen does. The player produces a lot of nearly-right flowers first — and that run,
+not the payoff, is what makes the payoff land.
+
+### A trade, so there is no single right answer
+
+Clustered architectures carry proportionally smaller flowers (umbel 0.58, spike 0.66, raceme
+0.72). Without it a twelve-flowered raceme of full-size blooms is strictly the best genotype,
+every player converges on it, and open-ended breeding is over. The penalty is ordered by how
+many flowers the form carries, and bounded below so a floret never stops being a flower.
+
+### Format v2, and old links still open
+
+58 payload bits, 14 characters. A version-1 link decodes through a separate branch and fills the
+three new loci with `i`/`n`/`L` — not neutral defaults, but the alleles every v1 plant implicitly
+had, so an old link grows the flower it always grew. An upgrade that quietly handed back a
+different plant would be worse than refusing the link, because nobody could tell it had happened.
+
+The v1 compatibility vector in the tests is a real string emitted by the v1 encoder, recovered
+from git. It is the only expected value in that file not read off the implementation it checks,
+and therefore the only one that is evidence about the _format_ rather than about the current
+encoder agreeing with itself.
+
+### Four defects, and where each was actually found
+
+None of these were found by reading the code.
+
+**Mutation testing found two.** The raceme ripeness test passed with the ripeness gradient
+deleted — it was measuring "the terminal flower is a bud and sits at the top", which produces a
+size gradient all by itself, not the lateral ripening it claimed. And the cluster size trade,
+a load-bearing balance decision, had no test at all: removing it left everything green.
+
+**Measuring the render pipeline found one.** The renderer culls any bloom closer to another than
+0.62 of a radius, and an umbel's florets are _supposed_ to touch. Their spacing came out at 5.7px
+against a 5.8px threshold, so a third of every umbel was grown and then silently discarded before
+being drawn — the one architecture defined by clustering was the one the anti-clustering rule
+ate. Fixed at the geometry, not by weakening a cull that solitary flowers still need. **Every
+test in the file measured what `growPlant` RETURNS; none measured what reaches the canvas.**
+
+**Looking at the lookdev sheet found the rest**, including a regression this spec had explicitly
+warned against one section earlier. §20 records the rule that a generalisation must reproduce the
+numbers it generalises from. The new petal-width rule holds angular _fill_ constant and does
+reproduce the tuned 0.66 at five petals and 0.42 at nine — and then silently broke buds, which
+have three petals whatever the genotype, and three petals sharing a circle solve to a width 1.31×
+their own length. A petal wider than it is long. On a twelve-petal plant those blobs sat beside
+narrow open stars and the plant read as two species on one stem.
+
+The comment directly above that line claimed the generalisation had not moved a tuned number.
+**Writing the rule down, in the right file, one section earlier, did not prevent the violation —
+and neither did asserting the two cases the comment named.** The bud was a third case nobody
+thought to check, and only a picture showed it.
+
+Alongside it: leaves were sized off `bloomRadius`, so the cluster trade shrank every clustered
+plant's _foliage_ by up to 40% as a side effect, reintroducing §19's "blob on a stick" from a
+direction nothing was watching; and a bushy umbel put a full plate of florets on all thirty of
+its terminals and read as coral. Side axes now carry a reduced head — not a full one, and not a
+solitary flower, since gating the head off scattered the flowers back across the plant's height
+and measurably undid the "all at one point" signature.

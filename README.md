@@ -22,11 +22,11 @@ green deploy of a broken bundle looks fine in the Actions log and is broken in a
 
 `/garden/` is the game. `/lookdev/` is a diagnostic sheet that varies one gene per panel against
 a shared seed — useful for judging a single trait, useless for judging the game, since it draws
-the same plant twelve times.
+the same plant eighteen times.
 
 ## The genetics
 
-Eight loci, chosen so each contributes a different _kind_ of surprise rather than more of the
+Eleven loci, chosen so each contributes a different _kind_ of surprise rather than more of the
 same:
 
 | Locus         | Kind                | Effect                                                                   |
@@ -35,22 +35,48 @@ same:
 | Hue A, Hue B  | dosage              | Five hue classes across combined dosage 0–4                              |
 | Doubling      | discrete, recessive | `dd` converts stamens to petals                                          |
 | Petal shape   | allele series       | frilled > lobed > pointed > round                                        |
+| Inflorescence | allele series       | umbel > raceme > spike > solitary — _where_ the flowers sit              |
+| Petal count   | allele series       | 12 > 8 > 6 > 5                                                           |
+| Chlorophyll   | recessive lethal    | `ll` seedlings come up albino and die; `Ll` carriers are invisible       |
 | Vigour        | polygenic (6 loci)  | Reaching vs compact                                                      |
 | Droop         | polygenic (6 loci)  | Weeping vs upright — reads as behaviour _while growing_                  |
 | Branchiness   | polygenic (6 loci)  | Branch probability per tick                                              |
 
-Four surprise types fall out of that: a hidden recessive (`Dd` singles quietly carrying
+Six surprise types fall out of that: a hidden recessive (`Dd` singles quietly carrying
 doubling), **masking** — two white flowers can throw a coloured child, because white conceals
-whatever hue it carries — dosage steps, and continuous drift through the polygenic blocks.
+whatever hue it carries — dosage steps, continuous drift through the polygenic blocks, a
+**carrier** you can only detect by breeding it, and **linkage**.
 
 Traits are never disclosed before bloom. Growing the plant _is_ the reveal.
 
+### Linkage
+
+The discrete loci do not assort independently. They sit on a map, and a gamete is made by
+walking each chromosome and switching homolog at each interval with that interval's
+recombination fraction:
+
+| Chromosome                    | r    | What it means at the bed                                      |
+| ----------------------------- | ---- | ------------------------------------------------------------- |
+| pigment block — inflorescence | 0.12 | "white, and in an umbel" is a goal rather than a coin flip    |
+| doubling — petal count        | 0.06 | tight: the full doubled twelve-petal flower is a real project |
+| hue A — hue B                 | 0.30 | loose: an achieved colour breeds truer instead of regressing  |
+
+Independent assortment is the special case `r = 0.5`, so the old behaviour is contained in this
+one rather than replaced by it. The point is that linkage makes a breeding goal _cost_
+something: two desirable alleles on opposite homologs of a tight interval need a crossover to
+come together, so at `r = 0.06` about one gamete in seventeen carries both. The near-miss run is
+what makes the payoff land.
+
 ## Sharing
 
-Every genome packs into 11 base64url characters — eight loci in 48 bits, plus a version byte and
-a checksum. The code rides in the URL fragment, so it never reaches a server:
+Every genome packs into 14 base64url characters — eleven loci in 58 bits, plus a version byte
+and a checksum. The code rides in the URL fragment, so it never reaches a server:
 
-    https://musharna.github.io/heirloom/garden/#g=AWOPAIpYIKA
+    https://musharna.github.io/heirloom/garden/#g=Anv_9wggGDcB1A
+
+Links from before the gene set grew still open: an 11-character version-1 code decodes and fills
+the three newer loci with the alleles every version-1 plant implicitly had — solitary,
+five-petalled, viable — so it grows the same flower it always did.
 
 Growth is seeded from a hash of the genome alone, so that link grows the same plant for everyone.
 The checksum matters because the packing is dense — every bit pattern is a legal genome, so
@@ -66,7 +92,7 @@ Genome ──express()──▶ Phenotype ──growPlant(seed)──▶ primiti
    └── inherit(A,B) + mutate ──▶ child Genome              retire ──▶ accumulation buffer
 ```
 
-- `src/genome/` — loci, inheritance, mutation, expression, and an 11-character serialization
+- `src/genome/` — loci, a linkage map, meiosis, mutation, expression, and serialization
 - `src/growth/` — tropism-based agent growth; tips step, bend, branch and terminate in a bloom
 - `src/render/` — Canvas2D: variable-width stroke outlines, petals, the accumulating forest
 - `src/game/` — plots, the seed tray, the four verbs, save/load
@@ -77,7 +103,7 @@ canonical plant and a shared link reproduces it exactly.
 ## Tests
 
 ```sh
-npm test              # 183 unit tests
+npm test              # 254 unit tests
 npx tsc --noEmit
 ```
 
@@ -86,12 +112,13 @@ driver that runs the real thing in a real browser:
 
 ```sh
 npm run dev &     # the drivers drive a real server
-npm run drive     # all three, in order
+npm run drive     # all four, in order
 ```
 
 - `tools/drive-verbs.mjs` — clicks real flowers, asserts the four verbs fire
 - `tools/drive-forest.mjs` — retires plants, reads the background buffer's pixels back
 - `tools/drive-persist.mjs` — builds a garden, reloads the page, asserts it came back
+- `tools/check-viewports.mjs` — real device viewports; aspect distortion and rotation
 - `npm run shoot` — screenshots the garden into `shots/`
 
 Each driver carries negative controls, because a check that only ever passes proves nothing —

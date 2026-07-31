@@ -5,11 +5,15 @@ import {
   IDLE_AMPLITUDE,
   applySway,
   gustAt,
+  lerpPlacement,
   gustCenter,
+  type Placed,
   shearPoint,
   swayAt,
   swayPhase,
 } from "../src/render/motion";
+import { resolvePlacement } from "../src/render/accumulate";
+import { placeRetired } from "../src/render/forest";
 import { growPlant } from "../src/growth/sim";
 import { randomGenome } from "../src/genome/genome";
 import { express } from "../src/genome/express";
@@ -222,5 +226,62 @@ describe("motion never touches the plant", () => {
     for (let t = 0; t < 900; t += 7)
       if (Math.abs(swayAt(t, key, 400, WORLD)) > 0.002) moved = true;
     expect(moved).toBe(true);
+  });
+});
+
+describe("receding hands over to the buffer without a visible seam", () => {
+  const PLACE = { dx: -140, dy: -22, scale: 0.7, alpha: 0.34, blur: 2.4 };
+
+  // Field-by-field rather than `toEqual`, because the endpoints are reached by arithmetic:
+  // `place.dx * 0` is -0 for a negative dx, and `1 + (0.34 - 1) * 1` is 0.33999999999999997.
+  // Both are visually identical to the value they are compared against, which is the property
+  // that actually matters here; bit-equality is not.
+  const same = (a: Placed, b: Placed) => {
+    for (const k of ["dx", "dy", "scale", "alpha", "blur"] as const)
+      expect(a[k], k).toBeCloseTo(b[k], 12);
+  };
+
+  it("starts from the IDENTITY — the plant does not jump when it begins", () => {
+    // At u = 0 the plant is still standing in the bed, and anything other than "no offset,
+    // full size, fully opaque, unblurred" is a jump on the frame the player drops a seed.
+    same(lerpPlacement(PLACE, 0), { dx: 0, dy: 0, scale: 1, alpha: 1, blur: 0 });
+  });
+
+  it("ends EXACTLY on the placement the buffer will composite", () => {
+    // The other endpoint, and the more dangerous one: the animation hands over to a drawImage
+    // of the composited buffer, so a mismatch here is a jump at the moment the player is
+    // watching that plant.
+    same(lerpPlacement(PLACE, 1), PLACE);
+  });
+
+  it("moves monotonically between the two", () => {
+    let last = 1;
+    for (const u of [0, 0.1, 0.3, 0.5, 0.8, 1]) {
+      const s = lerpPlacement(PLACE, u).scale;
+      expect(s).toBeLessThanOrEqual(last + 1e-9);
+      last = s;
+    }
+  });
+
+  it("clamps outside 0..1 rather than overshooting", () => {
+    // `now - start` can exceed the window by a frame, and a scale past the endpoint would
+    // shrink the plant smaller than the background copy it is about to become.
+    same(lerpPlacement(PLACE, 1.4), PLACE);
+    expect(lerpPlacement(PLACE, -0.4).scale).toBe(1);
+  });
+
+  it("uses the RESERVED placement when one was given", () => {
+    // Several plants can be receding at once, so the layer index the buffer would compute at
+    // composite time is not the one the animation eased toward. Ignoring the reservation
+    // sends the plant to a different spot in the frame where the two swap over.
+    const reserved = { dx: 99, dy: -5, scale: 0.5, alpha: 0.4, blur: 1.5 };
+    expect(resolvePlacement(reserved, 12345, 3, WORLD)).toBe(reserved);
+  });
+
+  it("CONTROL: falls back to a fresh placement when none was reserved", () => {
+    // Without this the assertion above is satisfied by a function that always returns its
+    // first argument, including when that argument is undefined.
+    const fresh = resolvePlacement(undefined, 12345, 3, WORLD);
+    expect(fresh).toEqual(placeRetired(12345, 3, WORLD));
   });
 });

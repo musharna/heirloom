@@ -101,6 +101,21 @@ Growth is seeded from a hash of the genome alone, so that link grows the same pl
 The checksum matters because the packing is dense — every bit pattern is a legal genome, so
 without it a mistyped link would silently hand back the wrong flower instead of an error.
 
+## Starting over
+
+The garden saves itself and comes back when you return. To wipe it and start fresh, add `#new`
+to the URL:
+
+    https://musharna.github.io/heirloom/garden/#new
+
+It asks first, because a fragment travels — a link with `#new` on the end would otherwise delete
+the garden of everyone who opened it. Everything goes: plants, seeds, the background, and the
+notebook. What survives is the first-run pass, on the grounds that someone asking for a new
+garden already knows how to plant a seed.
+
+There is deliberately no button for this. The game has no menus, and a permanent "delete
+everything" control does not belong on a screen whose whole design is that it has none.
+
 ## Architecture
 
 One-way pipeline; the renderer never sees a genome.

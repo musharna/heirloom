@@ -150,6 +150,51 @@ check('CONTROL: clearing storage gives a DIFFERENT garden',
 check('CONTROL: a fresh garden has an empty background',
   (await state()).forestDepth === 0);
 
+// --- #new starts a fresh garden, and only when confirmed ---------------------------------
+//
+// There was no way to start over at all, and the obvious one — clear localStorage from the
+// console and reload — did NOT work: the pagehide save flush fired during the reload and wrote
+// the garden back over the clear. So this checks the thing a player will actually do, and its
+// refusal path, because a fragment travels and a mis-shared link must not silently delete
+// somebody's breeding history.
+{
+  await page.goto(URL, { waitUntil: 'networkidle' });
+  await ready();
+  await page.waitForTimeout(200);
+  const had = (await codes()).plots.join('|');
+
+  // ONE persistent handler with a flag, not `page.once`. With `once`, the second dialog is
+  // auto-dismissed by Playwright before the new handler can claim it, and the run dies on
+  // "Cannot accept dialog which is already handled".
+  let acceptReset = false;
+  page.on('dialog', (d) => (acceptReset ? d.accept() : d.dismiss()));
+
+  // DECLINE first. A reset that happens anyway is worse than no reset at all.
+  await page.goto(`${URL}#new`, { waitUntil: 'networkidle' });
+  await ready();
+  await page.waitForTimeout(250);
+  check('CONTROL: declining #new leaves the garden untouched',
+    (await codes()).plots.join('|') === had, 'the garden must survive a refused reset');
+
+  // ...and accepting really does start over.
+  acceptReset = true;
+  await page.goto(`${URL}#new`, { waitUntil: 'networkidle' });
+  await ready();
+  await page.waitForTimeout(250);
+  const fresh = (await codes()).plots.join('|');
+  check('#new starts a fresh garden', fresh !== had, 'a fresh garden must differ from the old one');
+  check('#new leaves no fragment behind to re-fire on refresh',
+    !(await page.evaluate(() => location.hash)).includes('new'),
+    await page.evaluate(() => location.hash) || '(none)');
+
+  // And the reset STICKS across a reload — the flush must not resurrect what was cleared.
+  await page.reload({ waitUntil: 'networkidle' });
+  await ready();
+  await page.waitForTimeout(250);
+  check('the fresh garden survives a reload',
+    (await codes()).plots.join('|') !== had, 'the old garden must not come back');
+}
+
 // --- A corrupt save must be REJECTED OUT LOUD, not silently reset ------------------------
 await page.evaluate(() =>
   localStorage.setItem('heirloom.garden.v1', JSON.stringify({ v: 99, plots: [], ages: [], tray: [], replay: [] })),

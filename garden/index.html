@@ -100,6 +100,71 @@
         touch-action: none; /* or a drag scrolls the page instead of moving a seed */
         cursor: default;
       }
+
+      /* The plant card. HTML rather than canvas: this is the one part of the game that is
+         genuinely TEXT, and text on a canvas cannot be selected, copied, read by a screen
+         reader, or resized by someone who needs it larger. */
+      #card {
+        position: fixed;
+        z-index: 5;
+        max-width: min(19rem, calc(100vw - 24px));
+        background: #141a1d;
+        border: 1px solid #33413a;
+        border-radius: 4px;
+        padding: 10px 12px 11px;
+        color: #b9cdc0;
+        box-shadow: 0 6px 22px rgb(0 0 0 / 55%);
+        line-height: 1.55;
+      }
+      #card[hidden] {
+        display: none;
+      }
+      #card h2 {
+        margin: 0 0 6px;
+        font: inherit;
+        font-weight: 400;
+        color: #e4f0e6;
+        letter-spacing: 0.02em;
+      }
+      #card ul {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      #card li::before {
+        content: "· ";
+        opacity: 0.5;
+      }
+      #card .carries {
+        margin-top: 7px;
+        padding-top: 7px;
+        border-top: 1px solid #26312c;
+        color: #ecc474; /* a deduction is not an observation, and should not look like one */
+      }
+      #card .from {
+        margin-top: 7px;
+        opacity: 0.6;
+      }
+      #card .nothing {
+        margin-top: 7px;
+        padding-top: 7px;
+        border-top: 1px solid #26312c;
+        opacity: 0.55;
+      }
+      #card button {
+        position: absolute;
+        top: 6px;
+        right: 6px;
+        border: 0;
+        background: none;
+        opacity: 0.5;
+        padding: 2px 5px;
+        line-height: 1;
+      }
+      #card button:hover {
+        opacity: 1;
+        background: none;
+      }
     </style>
   </head>
   <body>
@@ -109,6 +174,7 @@
       <span id="hint"></span>
       <span id="code"></span>
     </div>
+    <div id="card" hidden role="dialog" aria-label="plant"></div>
     <script type="module" src="./garden.ts"></script>
   </body>
 </html>

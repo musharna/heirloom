@@ -4,11 +4,22 @@ import {
   createGarden,
   crossOf,
   grow,
+  isGrown,
   plantSeed,
   sowFounders,
   spliceSeeds,
   type Garden,
 } from "../src/game/garden";
+import {
+  carriedBy,
+  describeCarried,
+  describeTraits,
+  emptyNotebook,
+  offspringCount,
+  recordCross,
+  shortLabel,
+  type Notebook,
+} from "../src/game/notebook";
 import {
   bloomAt,
   plotAt,
@@ -100,6 +111,14 @@ let retirementLog: ReplayEntry[] = [];
 /** Non-empty while something needs saying out loud — a rejected save or a bad share link. */
 let notice = "";
 
+/**
+ * The field notebook: every cross the player has grown out.
+ *
+ * Owned here for the same reason as `retirementLog` — it is running history, and anything
+ * derived from the current garden state would be wiped by the first reload.
+ */
+let notebook: Notebook = emptyNotebook();
+
 let garden: Garden;
 let restored: { genome: Genome; x: number }[] = [];
 
@@ -116,6 +135,7 @@ if (stored) {
   if (loaded?.ok) {
     garden = loaded.garden;
     restored = loaded.replay;
+    notebook = loaded.notebook;
     retirementLog = loaded.replay.map((r) => ({
       g: serialize(r.genome),
       x: r.x,
@@ -261,6 +281,11 @@ function relayout(): void {
       genomeSeed(g.genome),
     );
   }
+  // The bed just changed shape, so a plot index no longer means the same plant — and the
+  // surplus plants that just retired may include the one whose card is open. Closing is the
+  // honest response; repositioning would leave a card describing a plant that is now in the
+  // background.
+  closeCard();
   scheduleSave();
 }
 
@@ -281,7 +306,7 @@ function scheduleSave(): void {
     try {
       localStorage.setItem(
         SAVE_KEY,
-        JSON.stringify(toSave(garden, now, retirementLog)),
+        JSON.stringify(toSave(garden, now, retirementLog, notebook)),
       );
     } catch (e) {
       // Quota exceeded, private mode, disabled storage. Say so — a garden that silently
@@ -325,10 +350,56 @@ function toCanvas(e: PointerEvent): Vec2 {
   };
 }
 
+/**
+ * Long-press to read a plant.
+ *
+ * The first attempt was "click the plant anywhere that is not a flower", which works on a
+ * sparse plant and fails completely on the plants this game is now capable of growing: a
+ * bushy raceme carries sixty-eight flowers, and between them there is almost no bare stem
+ * left to aim at. The driver found it immediately — every attempt to open a card landed on a
+ * bloom and took a seed instead.
+ *
+ * A press-and-hold consumes no gesture the game already uses (a click is CLONE, a drag is
+ * CROSS or PLANT), needs no on-screen control against a deliberately bare interface, and is
+ * the one inspect gesture that works identically under a finger and a mouse.
+ */
+const PRESS_MS = 450;
+let pressTimer = 0;
+let pressAt: Vec2 | null = null;
+/**
+ * Set when a hold has already acted, so the pointerup that ENDS the hold does not act again.
+ *
+ * Without it the gesture cancels itself: the timer opens the card, the finger lifts, and the
+ * click path sees no drag in progress, treats the lift as a tap on the plant, and toggles the
+ * card straight back off. The card appeared and vanished within one gesture, which reads as
+ * the feature simply not working.
+ */
+let pressFired = false;
+
+function cancelPress(): void {
+  clearTimeout(pressTimer);
+  pressAt = null;
+}
+
 canvas.addEventListener("pointerdown", (e) => {
   const p = toCanvas(e);
   pointer = p;
   canvas.setPointerCapture(e.pointerId);
+
+  pressAt = p;
+  clearTimeout(pressTimer);
+  pressTimer = window.setTimeout(() => {
+    const on = plantAt(p);
+    if (on === null || !garden.plots[on]?.occupant) return;
+    // Cancel whatever the press had picked up. Without this the pointerup that ends the hold
+    // would still fire CLONE, so reading a plant would quietly also take a seed from it.
+    drag = null;
+    pressAt = null;
+    inspecting = on;
+    pressFired = true;
+    learn("read");
+    renderCard();
+  }, PRESS_MS);
 
   const seed = seedAt(garden, p, W, H);
   if (seed !== null) {
@@ -348,9 +419,17 @@ canvas.addEventListener("pointerdown", (e) => {
 
 canvas.addEventListener("pointermove", (e) => {
   pointer = toCanvas(e);
+  // Moving turns a hold into a drag. Without a slop threshold the tiny jitter of a finger
+  // resting on glass cancels every long press before it can fire.
+  if (
+    pressAt &&
+    Math.hypot(pointer.x - pressAt.x, pointer.y - pressAt.y) > CLICK_SLOP
+  )
+    cancelPress();
 });
 
 canvas.addEventListener("pointerup", (e) => {
+  cancelPress();
   release(e);
   // One call covering every branch, rather than one per verb. The handler has four early
   // returns, and a per-branch save is exactly the shape where the fifth branch added later
@@ -362,7 +441,23 @@ function release(e: PointerEvent): void {
   const p = toCanvas(e);
   const d = drag;
   drag = null;
-  if (!d) return;
+  // A hold already acted on this gesture; the lift that ends it must not act again.
+  if (pressFired) {
+    pressFired = false;
+    return;
+  }
+  if (!d) {
+    // Nothing was picked up, so this was a click on the scene itself. On a plant it opens that
+    // plant's card; anywhere else it closes whatever is open — which is the behaviour a panel
+    // over a game board has to have, or it becomes something you must aim at a small ✕ to
+    // dismiss.
+    const on = plantAt(p);
+    if (on !== null && garden.plots[on]?.occupant) {
+      inspecting = inspecting === on ? null : on;
+      renderCard();
+    } else closeCard();
+    return;
+  }
   const travelled = Math.hypot(p.x - d.from.x, p.y - d.from.y);
 
   if (d.kind === "bloom") {
@@ -370,11 +465,38 @@ function release(e: PointerEvent): void {
     if (onto && onto.plotIndex !== d.plotIndex) {
       // CROSS — two different plants.
       const partner = garden.plots[onto.plotIndex]!.occupant!.genome;
-      garden = addSeed(garden, crossOf(d.genome, partner, rand));
+      garden = addSeed(garden, crossOf(d.genome, partner, rand), {
+        parents: [serialize(d.genome), serialize(partner)],
+        origin: "cross",
+      });
+      learn("cross");
+      flash = { at: p, until: now + FLASH_TICKS };
+    } else if (onto && travelled >= CLICK_SLOP) {
+      // SELF — a drag from one flower to ANOTHER FLOWER ON THE SAME PLANT.
+      //
+      // This used to do nothing, and its absence was a hole in the design rather than a
+      // missing convenience. Selfing is the classic test for a hidden recessive: a carrier
+      // crossed with itself throws the recessive in a quarter of its seedlings, and no other
+      // cross the player can perform reveals what a plant is carrying with anything like that
+      // reliability. Without it the albinism locus was a fact about the world with no
+      // instrument for investigating it.
+      //
+      // Distinguished from CLONE by travel alone, which is why the clone branch has to test
+      // distance rather than simply catching everything that is not a cross.
+      garden = addSeed(garden, crossOf(d.genome, d.genome, rand), {
+        parents: [serialize(d.genome), serialize(d.genome)],
+        origin: "self",
+      });
+      learn("self");
       flash = { at: p, until: now + FLASH_TICKS };
     } else if (travelled < CLICK_SLOP) {
-      // CLONE — a click that never became a drag.
-      garden = addSeed(garden, cloneOf(d.genome, rand));
+      // CLONE — a click that never became a drag. A clone is genetically its parent, so it
+      // can never reveal a carrier; that is exactly why selfing had to exist.
+      garden = addSeed(garden, cloneOf(d.genome, rand), {
+        parents: [serialize(d.genome), serialize(d.genome)],
+        origin: "clone",
+      });
+      learn("clone");
       flash = { at: p, until: now + FLASH_TICKS };
     }
     return;
@@ -392,6 +514,7 @@ function release(e: PointerEvent): void {
   // rearranging, not planting, and every x in the bed is within some plot's reach.
   if (plot !== null && p.y < SOIL + 24) {
     garden = plantSeed(garden, d.id, plot, SOIL, now);
+    learn("plant");
     flash = { at: { x: plotXs[plot]!, y: SOIL }, until: now + FLASH_TICKS };
   }
 }
@@ -438,6 +561,185 @@ function paintHalo(at: Vec2, r: number, alpha: number, rgb = RING_PLANT): void {
   ctx.stroke();
 }
 
+/**
+ * The plot whose plant is under a point, or null.
+ *
+ * Its own hit test rather than reusing `plotAt`, which answers a different question: `plotAt`
+ * finds the plot a dragged SEED should land in, so it deliberately covers the whole bed
+ * including bare ground. Opening a card wants the opposite — a click has to be ON a plant, or
+ * every tap on empty sky would pop a panel over the garden.
+ *
+ * Blooms are tested first by the caller, so this only ever sees clicks on stems and foliage.
+ */
+function plantAt(p: Vec2): number | null {
+  let best: number | null = null;
+  let bestD = Infinity;
+  for (const [i, plot] of garden.plots.entries()) {
+    const occ = plot.occupant;
+    if (!occ) continue;
+    const age = now - occ.plantedAt;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const s of occ.plant.segments) {
+      if (s.tick > age) continue;
+      minX = Math.min(minX, s.x0, s.x1);
+      maxX = Math.max(maxX, s.x0, s.x1);
+      minY = Math.min(minY, s.y0, s.y1);
+      maxY = Math.max(maxY, s.y0, s.y1);
+    }
+    if (minX === Infinity) continue;
+    // Padding, because a stem is a few pixels wide and the bounding box of a sparse plant is
+    // mostly air. This is a forgiving target on purpose: it is an inspect gesture, not a
+    // precision one.
+    const pad = 26;
+    if (p.x < minX - pad || p.x > maxX + pad) continue;
+    if (p.y < minY - pad || p.y > maxY + pad) continue;
+    // Canopies overlap. Nearest centre, so a click in the overlap goes to the plant it is
+    // actually closest to rather than to whichever plot came first in the array.
+    const d = Math.abs(p.x - (minX + maxX) / 2);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+/** The plot whose card is open, or null. */
+let inspecting: number | null = null;
+
+const cardEl = document.getElementById("card")!;
+
+const esc = (s: string): string =>
+  s.replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] ?? c,
+  );
+
+/**
+ * Draw the card for a plot, or hide it.
+ *
+ * Everything here comes from the NOTEBOOK, never from the genome directly, and that is the
+ * whole point of the feature. The genome is one function call away and printing it would be
+ * easier than any of this — and it would delete the carrier mechanic, because a carrier is
+ * defined by being indistinguishable until you breed it.
+ */
+function renderCard(): void {
+  const plot = inspecting === null ? null : garden.plots[inspecting];
+  const occ = plot?.occupant;
+  if (!occ || !isGrown(occ, now)) {
+    // An unfinished plant shows nothing. §4: traits are not disclosed before bloom, and a card
+    // that reported them mid-growth would be a way to read the flower before it opened.
+    cardEl.hidden = true;
+    return;
+  }
+
+  const code = serialize(occ.genome);
+  const carried = carriedBy(notebook, code);
+  const grown = offspringCount(notebook, code);
+
+  const traits = describeTraits(code)
+    .map((t) => `<li>${esc(t)}</li>`)
+    .join("");
+
+  const carries = carried.length
+    ? `<div class="carries"><ul>${carried
+        .map((c) => `<li>${esc(describeCarried(c))}</li>`)
+        .join("")}</ul></div>`
+    : `<div class="nothing">${
+        grown === 0
+          ? "nothing known beyond what it shows. Cross it — or self it — and grow the seedlings."
+          : `nothing hidden found yet, from ${grown} seedling${grown === 1 ? "" : "s"} grown.`
+      }</div>`;
+
+  const from =
+    occ.parents && occ.origin && occ.origin !== "founder"
+      ? `<div class="from">${esc(originLine(occ.origin, occ.parents))}</div>`
+      : `<div class="from">one of the garden's founders</div>`;
+
+  cardEl.innerHTML =
+    `<button type="button" aria-label="close">✕</button>` +
+    `<h2>${esc(shortLabel(code))}</h2><ul>${traits}</ul>${carries}${from}`;
+  cardEl.hidden = false;
+  positionCard(occ.plant.segments[0]?.x0 ?? W / 2);
+}
+
+/** How this plant came to be, in the voice of the rest of the card. */
+function originLine(origin: string, parents: [string, string]): string {
+  const a = shortLabel(parents[0]);
+  const b = shortLabel(parents[1]);
+  if (origin === "self") return `self-crossed from a ${a}`;
+  // Named as what it is. A clone is genetically its parent, so it can never turn up an allele
+  // the parent was not already carrying — worth saying, because it is the reason clicking a
+  // flower over and over never answers anything.
+  if (origin === "clone")
+    return `a cutting of a ${a} — same plant, no new evidence`;
+  return `from a ${a} × ${b} cross`;
+}
+
+/** Put the card beside its plant, and never off the edge of the window. */
+function positionCard(worldX: number): void {
+  const box = canvas.getBoundingClientRect();
+  const x = box.left + (worldX / W) * box.width;
+  const w = cardEl.offsetWidth;
+  const left = Math.max(8, Math.min(window.innerWidth - w - 8, x - w / 2));
+  cardEl.style.left = `${Math.round(left)}px`;
+  const top = box.top + 10;
+  cardEl.style.top = `${Math.round(Math.max(8, Math.min(window.innerHeight - cardEl.offsetHeight - 8, top)))}px`;
+}
+
+function closeCard(): void {
+  inspecting = null;
+  cardEl.hidden = true;
+}
+
+cardEl.addEventListener("pointerdown", (e) => {
+  // Only the close button acts; clicks on the text must not fall through to the canvas.
+  e.stopPropagation();
+  if ((e.target as HTMLElement).tagName === "BUTTON") closeCard();
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeCard();
+});
+
+/**
+ * File an observation for every plant that has finished growing.
+ *
+ * The timing is the design, not an implementation detail. A cross is recorded when its child
+ * has GROWN — not when the seed was made — because the evidence is the seedling, and a
+ * notebook that filed the entry at cross time would let the player deduce a parent's hidden
+ * alleles from a seed they never planted. That is the same disclosure §4 forbids, arriving by
+ * a longer route, and it would also remove the reason to plant anything.
+ *
+ * An albino counts. It never blooms, but it finishes growing, and it is the single most
+ * informative thing that can happen in this garden.
+ */
+function recordGrownPlants(): void {
+  let filed = false;
+  for (const plot of garden.plots) {
+    const p = plot.occupant;
+    if (!p || p.seedId === undefined || !p.parents) continue;
+    if (!isGrown(p, now)) continue;
+    const before = notebook;
+    notebook = recordCross(notebook, {
+      seedId: p.seedId,
+      child: serialize(p.genome),
+      parents: p.parents,
+    });
+    if (notebook !== before) filed = true;
+  }
+  if (filed) {
+    scheduleSave();
+    // An open card is a view of the notebook, so it has to follow it. The moment a seedling
+    // finishes growing is exactly the moment a deduction can appear, and a card that only
+    // refreshed when reopened would hide the payoff behind a click nobody knows to make.
+    if (inspecting !== null) renderCard();
+  }
+}
+
 /** The plot a seed drag would land in, or null. Shared by the ring and the hint text. */
 function dropTarget(): number | null {
   if (drag?.kind !== "seed") return null;
@@ -458,6 +760,8 @@ function frame(): void {
     composited++;
     scheduleSave();
   }
+
+  recordGrownPlants();
 
   paintStage(ctx, W, H, SOIL);
   forest.draw(ctx);
@@ -569,6 +873,88 @@ codeEl.addEventListener("click", () => {
     });
 });
 
+/**
+ * The first-run pass.
+ *
+ * Staged rather than a wall of instructions, and it retires itself: each line is shown until
+ * the player has done that thing once, then never again. A game with four verbs and no menus
+ * has to teach them somehow, and the alternative — a static list — is both ignored and
+ * permanent.
+ *
+ * Ordered so each lesson is possible when it appears: you cannot plant before you have a seed.
+ * SELF comes last because it is the one verb whose PURPOSE needs saying — the others are
+ * discoverable by poking at flowers, but nothing about the garden suggests that crossing a
+ * plant with itself is how you find out what it is carrying.
+ */
+const LEARNED_KEY = "heirloom.learned.v1";
+type Verb = "clone" | "plant" | "cross" | "self" | "read";
+
+/**
+ * Each lesson carries a condition for being WORTH showing, not only for being unlearned.
+ *
+ * Without it the sequence gives stale advice: a player whose first move is a cross has a seed
+ * in the tray and is still being told how to get one, because "clone" is technically
+ * unlearned. Telling someone to do a thing they have already achieved by another route is
+ * worse than saying nothing — it reads as the game not watching.
+ */
+const LESSONS: { verb: Verb; text: string; when: () => boolean }[] = [
+  {
+    verb: "clone",
+    text: "click a flower to take a seed",
+    when: () => garden.tray.length === 0,
+  },
+  {
+    verb: "plant",
+    text: "drag a seed from the tray onto a bare plot",
+    when: () => garden.tray.length > 0,
+  },
+  {
+    verb: "cross",
+    text: "drag one plant's flower onto another's to cross them",
+    when: () => garden.plots.filter((p) => p.occupant).length > 1,
+  },
+  {
+    verb: "self",
+    text: "drag a flower onto its OWN plant to self it — how to find what it hides",
+    when: () => true,
+  },
+  {
+    verb: "read",
+    text: "press and hold a plant to read what you know about it",
+    when: () => true,
+  },
+];
+
+const learned = new Set<Verb>(
+  (() => {
+    try {
+      const raw = localStorage.getItem(LEARNED_KEY);
+      return Array.isArray(JSON.parse(raw ?? "null"))
+        ? (JSON.parse(raw!) as Verb[])
+        : [];
+    } catch {
+      // A corrupt teaching record is worth nothing and costs nothing: show the lessons again.
+      return [];
+    }
+  })(),
+);
+
+function learn(v: Verb): void {
+  if (learned.has(v)) return;
+  learned.add(v);
+  try {
+    localStorage.setItem(LEARNED_KEY, JSON.stringify([...learned]));
+  } catch {
+    // Storage can be full or disabled. The lesson simply reappears next session, which is a
+    // far better failure than blocking a verb on being able to write to disk.
+  }
+}
+
+function teachingHint(): string | null {
+  for (const l of LESSONS) if (!learned.has(l.verb) && l.when()) return l.text;
+  return null;
+}
+
 function hint(): string {
   if (drag?.kind === "seed") {
     const plot = dropTarget();
@@ -576,10 +962,9 @@ function hint(): string {
       return "drop here to REPLACE the plant growing in this plot";
     return "drop it on a plot to plant it";
   }
-  if (drag?.kind === "bloom") return "drop it on another flower to cross them";
-  if (garden.tray.length === 0)
-    return "click a flower for a seed · drag one flower onto another to cross";
-  return "drag a seed onto a plot to plant it";
+  if (drag?.kind === "bloom")
+    return "drop it on another plant's flower to cross · on its own to self it";
+  return teachingHint() ?? "click a plant's stem to read it";
 }
 
 requestAnimationFrame(frame);
@@ -631,4 +1016,23 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __plotX: (i: number) => plotXs[i],
   __soil: SOIL,
   __size: () => ({ w: W, h: H }),
+  /** What the notebook has filed, and what it concludes — for driving the carrier discovery. */
+  __notebook: () => ({
+    crosses: notebook.crosses.length,
+    carries: garden.plots.map((p) =>
+      p.occupant
+        ? carriedBy(notebook, serialize(p.occupant.genome)).map((c) => c.locus)
+        : null,
+    ),
+  }),
+  /** The card's visible text, so a driver asserts what the PLAYER sees, not internal state. */
+  __card: () => (cardEl.hidden ? null : cardEl.textContent),
+  /** A point on a plant's stem, for opening its card without hitting a flower. */
+  __stemAt: (i: number) => {
+    const occ = garden.plots[i]?.occupant;
+    if (!occ) return null;
+    const s = occ.plant.segments[Math.min(3, occ.plant.segments.length - 1)];
+    return s ? { x: s.x0, y: s.y0 } : null;
+  },
+  __hint: () => hintEl.textContent,
 });

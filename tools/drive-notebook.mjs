@@ -95,8 +95,16 @@ check('the bed has flowers to work with', flowers.length > 3, `${flowers.length}
 // --- SELF-CROSS: drag a flower onto ANOTHER FLOWER OF THE SAME PLANT -----------------------
 //
 // This is the verb the whole feature turns on, and until this milestone it did nothing at all.
-const plotIndex = flowers[0].plotIndex;
-const sameplant = flowers.filter((f) => f.plotIndex === plotIndex);
+// The plant with the MOST flowers, not whichever happened to come first. Selfing needs two
+// flowers on one plant, and a solitary architecture can legitimately show a single bloom — so
+// picking flowers[0] made this a test of which plant the array happened to start with. It
+// failed that way on the live site while passing locally.
+const byPlot = new Map();
+for (const f of flowers)
+  byPlot.set(f.plotIndex, [...(byPlot.get(f.plotIndex) ?? []), f]);
+const [plotIndex, sameplant] = [...byPlot.entries()].sort(
+  (a, b) => b[1].length - a[1].length,
+)[0];
 check('a plant carries more than one flower to self between',
   sameplant.length > 1, `${sameplant.length} on plot ${plotIndex}`);
 

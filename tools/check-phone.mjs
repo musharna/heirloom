@@ -72,10 +72,18 @@ for (const [label, dev, slowdown] of [
   // through the game's own clock rather than a bare rAF loop means this cannot be flattered by
   // a change that makes the loop cheap without making anything appear on screen.
   const drawnFps = drawn.ticks / 1.4 / (drawn.ms / 1000);
-  // Thresholds set from MEASUREMENT, after two attempts to raise them both failed (see the
-  // note in garden.ts). 4x is roughly a mid-range Android; 6x a cheap one. Nothing in this
-  // game is timed or needs aim, so slow is playable — but a regression below these is not.
-  const floor = slowdown <= 4 ? 22 : 12;
+  // Floors set from a POPULATION of eight runs, not from one.
+  //
+  // They were first set from a single measurement — 23.2 and 17.3 — and both immediately began
+  // failing, because the real spread is 20.2-20.7 and 12.0-15.0 depending on which genomes the
+  // garden happened to sow. That is the same defect this project has now hit three times: a
+  // threshold picked from one sample lands inside the legitimate range and reports genome luck
+  // as a regression. These sit below the observed minimum with room, so what they catch is a
+  // real change rather than a different afternoon.
+  //
+  // 4x is roughly a mid-range Android; 6x a cheap one. Nothing here is timed or needs aim, so
+  // slow is playable — a regression is not.
+  const floor = slowdown <= 4 ? 16 : 9;
   check(label, drawnFps > floor,
     `${drawnFps.toFixed(1)} fps (floor ${floor}) · ${info.blooms} flowers · dpr ${info.dpr}${errors.length ? ` · ERR ${errors[0]}` : ''}`);
   if (errors.length) failures++;

@@ -6,6 +6,7 @@
  * only prove toSave/fromSave are inverses on an object that never left the process.
  */
 import { chromium } from 'playwright';
+import { gestures } from './gestures.mjs';
 
 const URL = process.env.GARDEN_URL ?? 'http://localhost:5173/garden/';
 const browser = await chromium.launch();
@@ -37,22 +38,9 @@ const toPage = (p) => ({
   x: box.x + (p.x * box.width) / size.w,
   y: box.y + (p.y * box.height) / size.h,
 });
-async function click(at) {
-  const p = toPage(at);
-  await page.mouse.move(p.x, p.y);
-  await page.mouse.down();
-  await page.mouse.up();
-  await page.waitForTimeout(80);
-}
-async function drag(from, to) {
-  const a = toPage(from);
-  const b = toPage(to);
-  await page.mouse.move(a.x, a.y);
-  await page.mouse.down();
-  await page.mouse.move(b.x, b.y, { steps: 8 });
-  await page.mouse.up();
-  await page.waitForTimeout(100);
-}
+// Shared gestures: a press slower than 450ms is a HOLD, not a click, and no driver can
+// promise its own press is quick. See tools/gestures.mjs.
+const { tap: click, drag } = gestures(page, box, size);
 
 // --- Build a garden worth saving --------------------------------------------------------
 await page.evaluate(() => window.__seek(600));

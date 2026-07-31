@@ -146,6 +146,7 @@ describe("plant — the drop verb", () => {
     g = plantSeed(g, first, 1, SOIL, 0);
     const displaced = g.plots[1]!.occupant!.genome;
     g = plantSeed(g, second, 1, SOIL, 50);
+    expect(g.retiredTotal).toBe(1);
     expect(g.retired).toHaveLength(1);
     expect(genomesEqual(g.retired[0]!.genome, displaced)).toBe(true);
     // The grown plant travels with it: the background composites pixels, so a genome alone
@@ -158,6 +159,23 @@ describe("plant — the drop verb", () => {
     let g = addSeed(fresh(), g0());
     g = plantSeed(g, g.tray[0]!.id, 0, SOIL, 0);
     expect(g.retired).toHaveLength(0);
+    expect(g.retiredTotal).toBe(0);
+  });
+
+  it("counts every retirement, even after the queue is drained", () => {
+    // `retired` is a QUEUE the frame loop empties once the plants are pixels — it used to be an
+    // unbounded history of the heaviest objects in the game, and because the render cache is
+    // keyed on the plant object, keeping them also pinned an offscreen canvas each. The count
+    // has to survive the drain, because it is what "how many plants have you replaced" means.
+    let g = fresh();
+    for (let i = 0; i < 5; i++) {
+      g = addSeed(g, randomGenome(mulberry32(40 + i)));
+      g = plantSeed(g, g.tray.at(-1)!.id, 0, SOIL, i * 10);
+      // Whatever drains it — the frame loop does this once the plants are composited.
+      g = { ...g, retired: [] };
+    }
+    expect(g.retired).toHaveLength(0);
+    expect(g.retiredTotal).toBe(4); // the first plant went into an empty plot
   });
 
   it("is a no-op on an unknown seed or plot, leaving the garden untouched", () => {

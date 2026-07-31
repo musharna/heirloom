@@ -2,6 +2,7 @@ import type { Plant } from "../types";
 import { PALETTE, paintPlant } from "./stage";
 import { WASH, placeRetired, type Placement } from "./forest";
 import { applyPlacement } from "./motion";
+import { paintPlantCached } from "./cache";
 
 /**
  * The accumulation buffer — the original's `bitmapData` trick, and the reason this game can
@@ -40,7 +41,7 @@ export class Forest {
   constructor(
     private readonly w: number,
     private readonly h: number,
-    dpr = 1,
+    private readonly dpr = 1,
   ) {
     this.canvas = document.createElement("canvas");
     this.canvas.width = w * dpr;
@@ -87,9 +88,15 @@ export class Forest {
     // The SAME placement routine the recede animation ends on, so the handover from the last
     // animated frame to this composite is invisible. Two copies of this arithmetic would drift
     // apart and the drift would show as a jump at exactly the moment the player is watching.
+    //
+    // And the plant goes in as a BLIT, not as vectors. `applyPlacement` sets a blur, and a
+    // canvas filter blurs every drawing operation separately — so painting a plant's several
+    // hundred paths under one costs seconds, not milliseconds. A soak measured six to nine
+    // seconds per retirement, which is a freeze every time the player replaces a plant, and
+    // sixty of them in a row when a saved garden's background is rebuilt on load.
     c.save();
     applyPlacement(c, { x: origin.x0, y: origin.y0 }, place);
-    paintPlant(c, plant);
+    paintPlantCached(c, plant, Infinity, -Infinity, this.dpr);
     c.restore();
 
     this.layers++;

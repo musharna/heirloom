@@ -28,7 +28,13 @@ import {
   traySlot,
 } from "../src/game/hit";
 import { computeLayout, layoutChanged, type Layout } from "../src/game/layout";
-import { SAVE_KEY, fromSave, toSave, type ReplayEntry } from "../src/game/save";
+import {
+  REPLAY_CAP,
+  SAVE_KEY,
+  fromSave,
+  toSave,
+  type ReplayEntry,
+} from "../src/game/save";
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
@@ -217,7 +223,26 @@ let now = 0;
  * a plant is covered automatically, including any future one.
  */
 let forest = new Forest(W, H, dpr);
-let composited = 0;
+
+/**
+ * Record a retirement in the durable history, capped.
+ *
+ * Capped IN MEMORY, not only on save. `toSave` already sliced to the last REPLAY_CAP, so
+ * everything beyond that was being kept for nothing — and `relayout` re-grows one plant per
+ * entry, so an afternoon's play would have turned rotating a phone into a multi-second freeze
+ * that got worse the longer you had been enjoying yourself.
+ */
+function logRetirement(p: {
+  genome: Genome;
+  plant: { segments: { x0: number }[] };
+}): void {
+  retirementLog.push({
+    g: serialize(p.genome),
+    x: p.plant.segments[0]?.x0 ?? W / 2,
+  });
+  if (retirementLog.length > REPLAY_CAP)
+    retirementLog = retirementLog.slice(-REPLAY_CAP);
+}
 
 /**
  * Plants on their way from the bed into the background.
@@ -299,6 +324,7 @@ function relayout(): void {
       };
     }),
     retired: [...garden.retired, ...surplus],
+    retiredTotal: garden.retiredTotal + surplus.length,
   };
 
   // The buffer is the wrong size now. Rebuild it from the durable log.
@@ -322,13 +348,10 @@ function relayout(): void {
   // in it.
   for (const s of surplus) {
     forest.retire(s.plant, genomeSeed(s.genome));
-    retirementLog.push({
-      g: serialize(s.genome),
-      x: s.plant.segments[0]?.x0 ?? W / 2,
-    });
+    logRetirement(s);
   }
-  // Everything in `retired` is now pixels, so the frame loop must not process any of it again.
-  composited = garden.retired.length;
+  // Everything in the queue is now pixels; the frame loop must not process any of it again.
+  garden = { ...garden, retired: [] };
   // Anything that WAS mid-recede belonged to a world that no longer exists: its reserved
   // placement was computed against the old width and the buffer it was heading for has just
   // been replaced. It is already in `retirementLog`, so the rebuild above drew it in the new
@@ -346,29 +369,60 @@ window.addEventListener("resize", relayout);
 window.addEventListener("orientationchange", relayout);
 
 /**
- * Persist on a trailing debounce.
+ * Persist on a debounce — with a ceiling.
  *
- * Every verb mutates the garden, and serializing a whole garden on each one would run on the
- * same frame as a drag. 700ms after the last change is imperceptible to a player and collapses
- * a burst of clicks into one write.
+ * Every verb mutates the garden, and serializing the whole thing on each one would run on the
+ * same frame as a drag, so a burst of clicks collapses into one write 700ms after the last.
+ *
+ * The ceiling is not a refinement; without it the feature does not work. A trailing debounce
+ * with no maximum wait never fires while the player keeps playing, because every action resets
+ * it. A soak run of 150 rounds at roughly 420ms each wrote **nothing at all** for the entire
+ * run — the save appeared only once the driver stopped — so an engaged player who closed the
+ * tab would have lost the lot. Found by watching the saved bytes across a long session; no
+ * single-action test could have shown it, because the bug is that the NEXT action arrives.
  */
+const SAVE_DEBOUNCE_MS = 700;
+const SAVE_MAX_WAIT_MS = 5000;
+
 let saveTimer = 0;
-function scheduleSave(): void {
+let savePendingSince = 0;
+
+function writeSave(): void {
   clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(() => {
-    try {
-      localStorage.setItem(
-        SAVE_KEY,
-        JSON.stringify(toSave(garden, now, retirementLog, notebook)),
-      );
-    } catch (e) {
-      // Quota exceeded, private mode, disabled storage. Say so — a garden that silently
-      // stops saving looks exactly like one that is saving fine until the tab closes.
-      notice = `could not save: ${(e as Error).message}`;
-      console.error("[heirloom] save failed:", e);
-    }
-  }, 700);
+  saveTimer = 0;
+  savePendingSince = 0;
+  try {
+    localStorage.setItem(
+      SAVE_KEY,
+      JSON.stringify(toSave(garden, now, retirementLog, notebook)),
+    );
+  } catch (e) {
+    // Quota exceeded, private mode, disabled storage. Say so — a garden that silently stops
+    // saving looks exactly like one that is saving fine until the tab closes.
+    notice = `could not save: ${(e as Error).message}`;
+    console.error("[heirloom] save failed:", e);
+  }
 }
+
+function scheduleSave(): void {
+  if (!savePendingSince) savePendingSince = Date.now();
+  if (Date.now() - savePendingSince >= SAVE_MAX_WAIT_MS) {
+    writeSave();
+    return;
+  }
+  clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(writeSave, SAVE_DEBOUNCE_MS);
+}
+
+// A tab can be closed or backgrounded between debounce and write. `visibilitychange` is the
+// event that actually fires on mobile — `beforeunload` does not, reliably, when an app is
+// swiped away.
+window.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && savePendingSince) writeSave();
+});
+window.addEventListener("pagehide", () => {
+  if (savePendingSince) writeSave();
+});
 
 // Called HERE, not at the point of definition: takeSharedGenome may schedule a save, and
 // `saveTimer` above is a `let` — invoking it any earlier would hit the temporal dead zone.
@@ -852,20 +906,22 @@ function frame(): void {
   // The placement is reserved here, as the plant leaves the bed, not when it finally lands:
   // several plants can be receding at once, so the layer index the buffer would compute at
   // composite time is not the one this plant is easing toward.
-  while (composited < garden.retired.length) {
-    const gone = garden.retired[composited]!;
-    const key = genomeSeed(gone.genome);
-    receding.push({
-      plant: gone.plant,
-      key,
-      place: placeRetired(key, forest.depth + receding.length, W),
-      start: now,
-    });
-    retirementLog.push({
-      g: serialize(gone.genome),
-      x: gone.plant.segments[0]?.x0 ?? W / 2,
-    });
-    composited++;
+  if (garden.retired.length) {
+    for (const gone of garden.retired) {
+      const key = genomeSeed(gone.genome);
+      receding.push({
+        plant: gone.plant,
+        key,
+        place: placeRetired(key, forest.depth + receding.length, W),
+        start: now,
+      });
+      logRetirement(gone);
+    }
+    // DRAIN the queue. It used to be an ever-growing history, which made it an unbounded array
+    // of the heaviest objects in the game — and because the render cache is keyed on the plant
+    // object, holding the plant also pinned an offscreen canvas of it. The durable history is
+    // `retirementLog`, which holds genome strings and is capped.
+    garden = { ...garden, retired: [] };
     scheduleSave();
   }
 
@@ -1146,7 +1202,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __state: () => ({
     tray: garden.tray.length,
     planted: garden.plots.filter((p) => p.occupant).length,
-    retired: garden.retired.length,
+    retired: garden.retiredTotal,
     empty: garden.plots.findIndex((p) => !p.occupant),
     occupied: garden.plots
       .map((p, i) => (p.occupant ? i : -1))
@@ -1190,7 +1246,23 @@ Object.assign(window as unknown as Record<string, unknown>, {
    * was what stopped it finishing.
    */
   __receding: () => receding.length,
+  /**
+   * Plot occupancy WITHOUT the buffer readback.
+   *
+   * `__state()` reports background coverage, which costs a `getImageData` over the whole
+   * buffer. A driver that calls it once per round spends its entire budget there — the first
+   * soak run did a hundred rounds in over twenty minutes and never reached its first sample.
+   */
+  __plots: () => ({
+    tray: garden.tray.length,
+    empty: garden.plots.findIndex((p) => !p.occupant),
+    occupied: garden.plots
+      .map((p, i) => (p.occupant ? i : -1))
+      .filter((i) => i >= 0),
+  }),
   __forestDepth: () => forest.depth,
+  /** Cumulative retirements, without the buffer readback `__state()` costs. */
+  __retiredTotal: () => garden.retiredTotal,
   /** What the notebook has filed, and what it concludes — for driving the carrier discovery. */
   __notebook: () => ({
     crosses: notebook.crosses.length,

@@ -148,6 +148,11 @@ export function shortLabel(code: string): string {
   const g = parse(code);
   if (!g) return "an unknown plant";
   const p = express(g);
+  // An albino never flowers, so naming its colour and arrangement describes a plant nobody
+  // will ever see. The card was headed "crimson raceme" directly above a line saying it will
+  // not flower — a contradiction in four words, and the kind that makes an interface feel like
+  // it is not paying attention.
+  if (!p.viable) return "albino seedling";
   const colour = p.white ? "white" : (HUE_NAMES[p.hueClass] ?? "coral");
   const form = p.inflorescence === "solitary" ? "" : ` ${p.inflorescence}`;
   return `${p.doubled ? "doubled " : ""}${colour}${form}`;

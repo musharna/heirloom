@@ -1,6 +1,7 @@
 import type { Plant } from "../types";
 import { PALETTE, paintPlant } from "./stage";
 import { WASH, placeRetired, type Placement } from "./forest";
+import { applyPlacement } from "./motion";
 
 /**
  * The accumulation buffer — the original's `bitmapData` trick, and the reason this game can
@@ -44,11 +45,17 @@ export class Forest {
    * Order matters: the wash is applied BEFORE the new plant is drawn, so the newcomer arrives
    * at full strength and only later retirements dim it. Washing afterwards would fade a plant
    * on the very frame it retired.
+   *
+   * @param at Optional placement, when the caller has already reserved one. The recede
+   *   animation needs to know where a plant is heading BEFORE it arrives, so it reserves a
+   *   placement as the plant leaves the bed; recomputing one here would use a different layer
+   *   index by then — several plants can be receding at once — and the animation would ease
+   *   toward one spot while the composite landed on another.
    */
-  retire(plant: Plant, genomeKey: number): void {
+  retire(plant: Plant, genomeKey: number, at?: Placement): void {
     const origin = plant.segments[0];
     if (!origin) return;
-    const place: Placement = placeRetired(genomeKey, this.layers, this.w);
+    const place: Placement = at ?? placeRetired(genomeKey, this.layers, this.w);
     const c = this.ctx;
 
     // `source-atop` confines the wash to pixels that already exist, so the empty background
@@ -60,12 +67,11 @@ export class Forest {
     c.fillRect(0, 0, this.w, this.h);
     c.restore();
 
+    // The SAME placement routine the recede animation ends on, so the handover from the last
+    // animated frame to this composite is invisible. Two copies of this arithmetic would drift
+    // apart and the drift would show as a jump at exactly the moment the player is watching.
     c.save();
-    c.globalAlpha = place.alpha;
-    c.filter = `blur(${place.blur.toFixed(2)}px)`;
-    c.translate(origin.x0 + place.dx, origin.y0 + place.dy);
-    c.scale(place.scale, place.scale);
-    c.translate(-origin.x0, -origin.y0);
+    applyPlacement(c, { x: origin.x0, y: origin.y0 }, place);
     paintPlant(c, plant);
     c.restore();
 

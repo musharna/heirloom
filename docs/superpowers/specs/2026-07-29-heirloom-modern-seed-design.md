@@ -910,8 +910,13 @@ measured and both failed**:
 
 Both are reverted. A drawn frame costs ~27ms on a 4×-slowed phone, of which under 4ms is
 JavaScript; the rest is rasterising and compositing a full-screen canvas. The remaining lever
-is dirty-rectangle rendering, which sway makes genuinely hard. The numbers are now guarded at
-~23fps (4×) and ~17fps (6×) — slow, and playable, since nothing here is timed or needs aim.
+is dirty-rectangle rendering, which sway makes genuinely hard.
+
+Measured across eight runs: **20.2–20.7 fps at a 4× slowdown and 12.0–15.0 at 6×** — slow, and
+playable, since nothing here is timed or needs aim. The floors were first set from a *single*
+sample of 23.2 and 17.3 and began failing immediately, which is the third time in this project
+that a threshold picked from one measurement landed inside the legitimate range and reported
+ordinary variation as a regression.
 
 ### A defect that was not one
 

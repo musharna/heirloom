@@ -122,7 +122,7 @@ canonical plant and a shared link reproduces it exactly.
 ## Tests
 
 ```sh
-npm test              # 320 unit tests
+npm test              # 332 unit tests
 npx tsc --noEmit
 ```
 
@@ -141,6 +141,7 @@ npm run drive     # all seven, in order
 - `tools/check-motion.mjs` — asserts the scene moves, the geometry does not, and it runs at 60fps
 - `tools/check-phone.mjs` — mobile viewport under CPU throttling, with measured floors
 - `npm run soak` — plays hundreds of rounds; watches save size, heap and frame rate
+- `npm run measure` — depth cues in the rendered pixels, with one genome in every plot
 - `tools/check-viewports.mjs` — real device viewports; aspect distortion and rotation
 - `npm run shoot` — screenshots the garden into `shots/`
 

@@ -8,6 +8,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "soak": "node tools/soak.mjs",
+    "measure": "node tools/measure-depth.mjs",
     "shoot": "node tools/shoot-garden.mjs",
     "shoot:lookdev": "node tools/shoot.mjs",
     "drive": "node tools/drive-verbs.mjs && node tools/drive-forest.mjs && node tools/drive-persist.mjs && node tools/drive-notebook.mjs && node tools/check-motion.mjs && node tools/check-viewports.mjs && node tools/check-phone.mjs"

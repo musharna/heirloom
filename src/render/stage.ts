@@ -10,6 +10,7 @@ import { leafMidrib, leafPath, leafVeins } from "./leaves";
 import { ease } from "./motion";
 import {
   fillPetal,
+  paintPetal,
   petalColor,
   petalFill,
   petalGlow,
@@ -188,6 +189,21 @@ export function paintStage(
 ): void {
   ctx.fillStyle = PALETTE.ground;
   ctx.fillRect(0, 0, w, h);
+
+  // A HORIZON, faintly.
+  //
+  // The sky was one flat colour, which gave the eye nothing to place the bed against: plants
+  // stood in front of an even field rather than in a space. A slow lift toward the ground line
+  // reads as distance behind them — the same trick a stage cyclorama uses, and for the same
+  // reason. Kept very quiet: this is a dark game, and anything more turns into a sunset.
+  const line = soilTop ?? soilLine(h);
+  const sky = ctx.createLinearGradient(0, Math.max(0, line - h * 0.62), 0, line);
+  sky.addColorStop(0, "rgba(94,126,140,0)");
+  sky.addColorStop(0.72, "rgba(94,126,140,0.045)");
+  sky.addColorStop(1, "rgba(120,150,158,0.085)");
+  ctx.fillStyle = sky;
+  ctx.fillRect(0, 0, w, line);
+
   const g = ctx.createRadialGradient(
     w / 2,
     h * 0.62,
@@ -537,14 +553,21 @@ export function paintPlant(
         // to return one byte-identical colour end to end, which is what made blooms read
         // as vector clip-art. Rim is chosen relative to the fill's lightness, so a pale
         // morph gets a dark outline — a fixed light rim cannot draw a white flower.
-        fillPetal(
+        //
+        // `paintPetal` adds what the flat fill could not: light through the thin tip, shadow
+        // where petals stack, and a midrib. Affordable because a settled plant is rendered
+        // once into a cached bitmap rather than every frame.
+        paintPetal(
           ctx,
+          p,
           petalPath(p),
           petalFill(ctx, p, b.hueClass, b.white),
           // Hue class matters now that lightness varies per hue: the rim is chosen by
           // CONTRAST with the fill, so passing the wrong lightness picks the wrong rim.
           petalRim(b.white, p.colorDepth, b.hueClass),
           petalRimWidth(p.width),
+          b.hueClass,
+          b.white,
         );
       }
     });

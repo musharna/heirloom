@@ -246,6 +246,100 @@ export function petalRimWidth(petalWidth: number): number {
   return Math.max(0.35, Math.min(1.1, petalWidth * 0.11));
 }
 
+/**
+ * A petal, with light coming through it.
+ *
+ * The previous petal was a fill plus a rim, and light passing THROUGH is the defining quality
+ * of a petal — the one thing the render did not attempt. Three additions, each clipped inside
+ * the petal so none of them leaks onto its neighbours:
+ *
+ *  - a translucent glow at the TIP, where a petal is thinnest and most light gets through;
+ *  - a darker pool at the BASE, where petals stack over one another and the flower is deepest.
+ *    This is what gives petal-over-petal depth: painter's order alone makes the top petal
+ *    opaque and the pile flat, since nothing gets darker for being underneath;
+ *  - a faint midrib, which real petals have and which reads at magnification.
+ *
+ * Affordable only because a settled plant is rendered once into a cached bitmap. Per-frame
+ * this would be several thousand extra gradients.
+ */
+export function paintPetal(
+  ctx: CanvasRenderingContext2D,
+  spec: PetalSpec,
+  pts: Vec2[],
+  fill: string | CanvasGradient,
+  stroke: string,
+  rimWidth: number,
+  hueClass: number,
+  white: boolean,
+): void {
+  if (pts.length < 3) return;
+  // The CURRENT path, not a Path2D. The current path survives save/restore, so it can be
+  // built once and used for the fill, the clip and the stroke — and Path2D does not exist in
+  // the environment the unit tests run in, which is where the first version fell over.
+  const trace = (): void => {
+    ctx.beginPath();
+    ctx.moveTo(pts[0]!.x, pts[0]!.y);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i]!.x, pts[i]!.y);
+    ctx.closePath();
+  };
+
+  trace();
+  ctx.fillStyle = fill;
+  ctx.fill();
+
+  const cx = spec.center.x;
+  const cy = spec.center.y;
+  const tipX = cx + Math.cos(spec.angle) * spec.length;
+  const tipY = cy + Math.sin(spec.angle) * spec.length;
+
+  ctx.save();
+  ctx.clip();
+
+  // Light through the thin outer margin.
+  const glow = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, spec.length * 0.75);
+  glow.addColorStop(0, petalGlow(hueClass, white, white ? 0.3 : 0.26));
+  glow.addColorStop(1, petalGlow(hueClass, white, 0));
+  ctx.fillStyle = glow;
+  ctx.fillRect(
+    cx - spec.length * 1.2,
+    cy - spec.length * 1.2,
+    spec.length * 2.4,
+    spec.length * 2.4,
+  );
+
+  // Shadow where this petal sits over its neighbours, deepening toward the centre.
+  const deep = ctx.createRadialGradient(cx, cy, 0, cx, cy, spec.length * 0.62);
+  deep.addColorStop(0, "rgba(24,10,26,0.34)");
+  deep.addColorStop(1, "rgba(24,10,26,0)");
+  ctx.fillStyle = deep;
+  ctx.fillRect(
+    cx - spec.length * 1.2,
+    cy - spec.length * 1.2,
+    spec.length * 2.4,
+    spec.length * 2.4,
+  );
+
+  // Midrib. Below about 7px it is a single dark pixel row and only muddies the fill.
+  if (spec.length > 7) {
+    ctx.strokeStyle = petalGlow(hueClass, white, 0.22);
+    ctx.lineWidth = Math.max(0.5, spec.width * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(spec.angle) * spec.length * 0.12,
+               cy + Math.sin(spec.angle) * spec.length * 0.12);
+    ctx.lineTo(cx + Math.cos(spec.angle) * spec.length * 0.86,
+               cy + Math.sin(spec.angle) * spec.length * 0.86);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // The petal edge IS the line-art of the art direction, so it has to actually read.
+  // Re-traced because the midrib above replaced the current path.
+  trace();
+  ctx.strokeStyle = stroke;
+  ctx.lineWidth = rimWidth;
+  ctx.stroke();
+}
+
 export function fillPetal(
   ctx: CanvasRenderingContext2D,
   pts: Vec2[],

@@ -2,6 +2,16 @@ export type Vec2 = { x: number; y: number };
 
 export type PetalShape = "round" | "pointed" | "lobed" | "frilled";
 
+/**
+ * Where flowers sit on the plant.
+ *
+ * - `solitary` — one terminal flower per shoot. The original game's only form.
+ * - `raceme` — stalked flowers up the shoot, oldest and most open at the bottom.
+ * - `spike` — the same, but sessile: flowers pressed against the stem.
+ * - `umbel` — every flower on its own stalk from a single point at the tip, like a cow parsley.
+ */
+export type Inflorescence = "solitary" | "raceme" | "spike" | "umbel";
+
 /** Flat parameter struct consumed by the growth engine. Contains no genetic concepts. */
 export type Phenotype = {
   // growth behaviour
@@ -18,9 +28,17 @@ export type Phenotype = {
   // bloom
   doubled: boolean; // dd — stamens converted to petals
   petalShape: PetalShape;
+  petalCount: number; // petals per whorl on a single flower
+  inflorescence: Inflorescence;
   hueClass: 0 | 1 | 2 | 3 | 4;
   white: boolean; // pigment block expressed
   bloomRadius: number; // px
+  /**
+   * False for an `ll` albino: the seedling germinates and dies. The growth engine reads this
+   * and produces a short, leafless, flowerless shoot rather than the caller checking it and
+   * skipping growth — a plant that failed is still a plant, and it still occupies its plot.
+   */
+  viable: boolean;
 };
 
 export type Tip = {
@@ -98,4 +116,12 @@ export type Plant = {
   segments: StrokeSegment[];
   blooms: Bloom[];
   leaves: LeafSpec[];
+  /**
+   * An `ll` seedling: no chlorophyll, so it is drawn in sickly cream rather than green.
+   *
+   * Carried on the Plant rather than looked up from the genome at paint time because the
+   * renderer takes a Plant and knows nothing about genetics, and the whole architecture
+   * depends on keeping it that way.
+   */
+  albino: boolean;
 };

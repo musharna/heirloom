@@ -22,6 +22,9 @@ const BASE: Genome = {
   H2: ["h2", "h2"],
   D: ["D", "D"],
   P: ["p", "p"],
+  I: ["i", "i"],
+  N: ["n", "n"],
+  L: ["L", "L"],
   V: poly(0, 0),
   G: poly(0, 0),
   B: poly(0, 0),
@@ -291,6 +294,17 @@ describe("founder population", () => {
         (["P^f", "P^l", "P^p", "p"] as const)[Math.floor(rand() * 4)]!,
         (["P^f", "P^l", "P^p", "p"] as const)[Math.floor(rand() * 4)]!,
       ],
+      // The same naive uniform draw extended to the newer series, so this stays a control for
+      // them too rather than silently agreeing with the shipped generator on three loci.
+      I: [
+        (["I^u", "I^r", "I^s", "i"] as const)[Math.floor(rand() * 4)]!,
+        (["I^u", "I^r", "I^s", "i"] as const)[Math.floor(rand() * 4)]!,
+      ],
+      N: [
+        (["N^12", "N^8", "N^6", "n"] as const)[Math.floor(rand() * 4)]!,
+        (["N^12", "N^8", "N^6", "n"] as const)[Math.floor(rand() * 4)]!,
+      ],
+      L: two(["L", "l"]),
       V: flat(),
       G: flat(),
       B: flat(),

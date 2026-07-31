@@ -116,6 +116,12 @@ export function express(g: Genome): Phenotype {
     // genotype in the game, which would collapse the whole point of open-ended breeding.
     bloomRadius:
       (14 + 9 * (1 - b) + 4 * v) * CLUSTER_SIZE_TRADE[inflorescenceOf(g)],
+    // Deliberately WITHOUT the cluster trade. Leaves belong to the plant, not to the flower
+    // head; an umbel-bearing plant has ordinary foliage. Sizing them off bloomRadius shrank
+    // every clustered plant's leaves by 40% as a side effect, and with five times the flower
+    // mass on top of that the plant read as a blob on a stick — the exact defect the visual
+    // pass had already fixed once (§19), reintroduced from a direction nothing was watching.
+    leafScale: 14 + 9 * (1 - b) + 4 * v,
     viable: isViable(g),
   };
 }

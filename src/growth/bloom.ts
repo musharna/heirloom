@@ -55,8 +55,22 @@ export function layoutBloom(
   // The two fill constants are not new numbers: they are the values that reproduce the
   // hand-tuned 0.66 at five petals and 0.42 at nine. A generalisation that moved the numbers
   // it was generalising from would be a regression wearing a refactor's clothes (§20).
+  //
+  // ...which is exactly what it did to BUDS, and the comment above did not save it. A bud has
+  // three petals whatever the genotype, and three petals in a 120-degree slot solve to a width
+  // of 1.31 times the length — a petal wider than it is long. On a twelve-petal plant the buds
+  // came out as fat blobs beside narrow open stars and read as two different species on one
+  // stem. Caught in the lookdev sheet, not by any assertion.
+  //
+  // A bud is the case the packing argument does not apply to: its petals are CLASPED, so they
+  // are supposed to overlap and their width is not set by how many have to fit around a
+  // circle. It keeps the constant that was tuned for it.
   const fill = pheno.doubled ? 0.58 : 0.51;
-  const widthFactor = 2 * Math.tan((fill * Math.PI) / perWhorl);
+  const widthFactor = bud
+    ? pheno.doubled
+      ? 0.42
+      : 0.66
+    : 2 * Math.tan((fill * Math.PI) / perWhorl);
 
   for (let w = 0; w < whorls; w++) {
     const whorlScale = 1 - 0.22 * w;

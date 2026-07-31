@@ -56,29 +56,35 @@ function openness(tip: Tip, rand: () => number): number {
  * An albino seedling: it germinates, spends the seed's reserves, and dies.
  *
  * A separate function rather than a flag threaded through the main loop, because almost
- * nothing about it is the same — no branching, no leaves, no flowers, no tropism worth
- * modelling over so few ticks. It still produces a real Plant with real segments, because it
- * still occupies a plot and the player still has to look at it. That is the whole design: the
- * failure is VISIBLE and sits in the bed as evidence, rather than a seed quietly doing nothing.
+ * nothing about it is the same — no branching, no flowers, no tropism worth modelling over so
+ * few ticks. It still produces a real Plant with real segments, because it still occupies a
+ * plot and the player still has to look at it. That is the whole design: the failure is
+ * VISIBLE and sits in the bed as evidence, rather than a seed quietly doing nothing.
+ *
+ * It carries COTYLEDONS. The first version was a bare shoot roughly 8% of a living plant's
+ * height, and in the lookdev sheet it was a cream-coloured speck — not obviously a plant at
+ * all, let alone a plant that had failed. A seedling with a pair of pale seed-leaves reads
+ * immediately as something that came up and stopped, which is the entire message.
  */
 function growAlbino(pheno: Phenotype, seed: number, origin: Vec2): Plant {
   const rand = mulberry32(seed);
   const segments: StrokeSegment[] = [];
-  // Short and getting shorter: reserves run out. Never enough height to look like a young
-  // healthy plant that might still make it.
-  const ticks = 9 + Math.floor(rand() * 5);
+  const leaves: LeafSpec[] = [];
+  // Short and getting shorter: reserves run out. Tall enough to read as a seedling, never
+  // close to a living plant — the two must not be confusable at a glance.
+  const ticks = 16 + Math.floor(rand() * 6);
   let pos = { ...origin };
   let dir = UP;
-  let width = pheno.baseWidth * 0.45;
+  let width = pheno.baseWidth * 0.42;
 
   for (let tick = 0; tick < ticks; tick++) {
     dir += (rand() - 0.5) * 0.3;
     // Each step shorter than the last — the shoot visibly gives up rather than being cut off
     // mid-stride at an arbitrary tick count.
-    const len = 3.4 * (1 - tick / ticks);
+    const len = 6.2 * (1 - tick / ticks);
     const nx = pos.x + Math.cos(dir) * len;
     const ny = pos.y + Math.sin(dir) * len;
-    const w1 = width * 0.9;
+    const w1 = width * 0.94;
     segments.push({
       x0: pos.x,
       y0: pos.y,
@@ -90,11 +96,29 @@ function growAlbino(pheno: Phenotype, seed: number, origin: Vec2): Plant {
       tick,
       chain: 0,
     });
+
+    // One opposed pair of seed-leaves, low down, and nothing after them. A seedling that kept
+    // producing leaves as it rose would be a small healthy plant, which is the opposite of
+    // what this is.
+    if (tick === Math.floor(ticks * 0.35)) {
+      for (const side of [1, -1]) {
+        leaves.push({
+          attach: { x: nx, y: ny },
+          angle: dir + side * 1.15,
+          length: pheno.leafScale * 0.4,
+          width: pheno.leafScale * 0.22,
+          tick,
+          seed: rand(),
+          side,
+        });
+      }
+    }
+
     pos = { x: nx, y: ny };
     width = w1;
   }
 
-  return { segments, blooms: [], leaves: [], albino: true };
+  return { segments, blooms: [], leaves, albino: true };
 }
 
 export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
@@ -194,7 +218,19 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
    */
   const terminate = (tip: Tip, tick: number): void => {
     if (pheno.inflorescence === "umbel") {
-      const rays = 5 + Math.floor(rand() * 3);
+      // A full plate forms on a MAIN axis; a side twig carries a reduced one.
+      //
+      // With every terminal bearing a full head, a bushy umbel put thirty plates of florets on
+      // one plant and the result did not read as thirty flower heads — it read as coral. Past
+      // a certain density small florets stop being countable and turn into texture, and the
+      // plant loses the very architecture this locus exists to express.
+      //
+      // Reduced rather than absent, and that distinction was worth a revision: gating the head
+      // off entirely gave side twigs a single solitary flower each, which scattered the plant's
+      // flowers back across its whole height and measurably undid the "all at one point"
+      // signature. Real umbellifers reduce their secondary umbels; they do not swap them for a
+      // different architecture.
+      const rays = tip.depth <= 1 ? 5 + Math.floor(rand() * 3) : 3;
       // Umbels open together, not in sequence — the synchrony IS the look.
       const open = Math.min(1, 0.74 + 0.3 * rand());
       for (let k = 0; k < rays; k++) {
@@ -302,7 +338,10 @@ export function growPlant(pheno: Phenotype, seed: number, origin: Vec2): Plant {
         // Scaled against bloomRadius, not against stem width. At a quarter of bloom size
         // the foliage rendered as dark flecks on the stem and contributed nothing to the
         // silhouette — on a real plant a leaf is comparable to a flower.
-        const scale = pheno.bloomRadius * (0.62 + 0.5 * pheno.vigour);
+        // `leafScale`, not `bloomRadius` — see the note on the field. A clustered plant has
+        // small flowers and ordinary leaves, and reading the flower size here silently
+        // shrank the foliage of every raceme, spike and umbel in the game.
+        const scale = pheno.leafScale * (0.62 + 0.5 * pheno.vigour);
         leaves.push({
           attach: { x: tip.pos.x, y: tip.pos.y },
           angle: tip.dir + side * (0.85 + 0.25 * rand()),

@@ -19,6 +19,7 @@ const SINGLE: Phenotype = {
   hueClass: 2,
   white: false,
   bloomRadius: 14,
+  leafScale: 14,
   petalCount: 5,
   inflorescence: "solitary",
   viable: true,

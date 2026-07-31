@@ -28,6 +28,7 @@ const BASE: Phenotype = {
   hueClass: 0,
   white: false,
   bloomRadius: 22,
+  leafScale: 22,
   petalCount: 5,
   inflorescence: "solitary",
   viable: true,
@@ -51,6 +52,41 @@ const CASES: { label: string; pheno: Phenotype }[] = [
   { label: "petal: frilled", pheno: { ...BASE, petalShape: "frilled" } },
   { label: "hue: violet", pheno: { ...BASE, hueClass: 3 } },
   { label: "hue: blue", pheno: { ...BASE, hueClass: 4 } },
+  // Architecture. These carry the cluster size trade with them, because the smaller floret is
+  // part of what each form LOOKS like — showing an umbel at solitary flower size would be a
+  // panel of a plant the game cannot produce, which is worse than no panel.
+  {
+    label: "raceme",
+    pheno: {
+      ...BASE,
+      inflorescence: "raceme",
+      bloomRadius: BASE.bloomRadius * 0.72,
+    },
+  },
+  {
+    label: "spike",
+    pheno: {
+      ...BASE,
+      inflorescence: "spike",
+      bloomRadius: BASE.bloomRadius * 0.66,
+    },
+  },
+  {
+    label: "umbel",
+    pheno: {
+      ...BASE,
+      inflorescence: "umbel",
+      bloomRadius: BASE.bloomRadius * 0.58,
+    },
+  },
+  { label: "12 petals", pheno: { ...BASE, petalCount: 12 } },
+  {
+    label: "12 petals, doubled",
+    pheno: { ...BASE, petalCount: 12, doubled: true },
+  },
+  // The only panel showing a plant that is not alive. Worth a slot precisely because it is
+  // rare in play — it is the one form a player may meet once and need to recognise.
+  { label: "albino (ll) — dies", pheno: { ...BASE, viable: false } },
 ];
 
 const grid = document.getElementById("grid")!;

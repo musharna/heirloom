@@ -26,6 +26,7 @@ const BASE: Phenotype = {
   hueClass: 2,
   white: false,
   bloomRadius: 16,
+  leafScale: 16,
   viable: true,
 };
 
@@ -333,6 +334,38 @@ describe("petal count is a real allele series, not a dial", () => {
     }
   });
 
+  it("REGRESSION: a BUD keeps the clasped petal it was tuned with", () => {
+    // The angular-packing rule does not apply to buds, and applying it anyway was a real
+    // regression that shipped: a bud has three petals whatever the genotype, and three petals
+    // sharing a circle solve to a width 1.31x their own length — a petal wider than it is
+    // long. On a twelve-petal plant the fat blobs sat beside narrow open stars and the plant
+    // read as two species on one stem. A bud's petals are CLASPED, so they are meant to
+    // overlap and their width is not set by how many must fit around a circle.
+    //
+    // Caught by looking at the lookdev sheet. Nothing in this file was measuring buds.
+    for (const petalCount of [5, 6, 8, 12]) {
+      const bud = layoutBloom(
+        { ...BASE, petalCount },
+        { x: 0, y: 0 },
+        -Math.PI / 2,
+        () => 0.5,
+        0.4, // below the 0.55 bud threshold
+        0,
+      );
+      expect(bud.petals.length, `${petalCount} petals`).toBe(3);
+      for (const p of bud.petals)
+        expect(p.width / p.length, `${petalCount} petals`).toBeLessThan(0.8);
+    }
+  });
+
+  it("CONTROL: an OPEN flower still gets the packing rule", () => {
+    // Pins that the exemption above is scoped to buds. Restoring the constant for every
+    // flower would satisfy the test above and undo the twelve-petal fix entirely.
+    const open = bloomOf({ petalCount: 12 });
+    expect(open.petals.length).toBe(12);
+    expect(open.petals[0]!.width / open.petals[0]!.length).toBeLessThan(0.4);
+  });
+
   it("CONTROL: the old constant width factor WOULD have fused a twelve-petal flower", () => {
     // Pins that the assertion above discriminates, using the value that actually shipped.
     const radius = 16;
@@ -344,10 +377,20 @@ describe("petal count is a real allele series, not a dial", () => {
 describe("an albino seedling", () => {
   const albino = grow({ viable: false });
 
-  it("germinates and dies — no flowers, no leaves", () => {
+  it("germinates and dies — it never flowers", () => {
     expect(albino.albino).toBe(true);
     expect(albino.blooms).toHaveLength(0);
-    expect(albino.leaves).toHaveLength(0);
+  });
+
+  it("carries a single opposed pair of cotyledons and nothing more", () => {
+    // The first version had no leaves at all, and in the lookdev sheet it was a cream speck —
+    // not obviously a plant, let alone a failed one. Two seed-leaves make it read immediately
+    // as something that came up and stopped.
+    //
+    // Exactly two, not "at least two": a seedling that kept producing leaves as it rose would
+    // be a small healthy plant, which is the opposite of the message.
+    expect(albino.leaves).toHaveLength(2);
+    expect(albino.leaves[0]!.side).toBe(-albino.leaves[1]!.side);
   });
 
   it("still exists as a plant in the bed", () => {
@@ -356,10 +399,15 @@ describe("an albino seedling", () => {
     expect(albino.segments.length).toBeGreaterThan(4);
   });
 
-  it("never reaches the height of a living plant", () => {
-    const top = (p: Plant) => Math.min(...p.segments.map((s) => s.y1));
-    expect(ORIGIN.y - top(albino)).toBeLessThan(30);
-    expect(ORIGIN.y - top(grow({ viable: true }))).toBeGreaterThan(80);
+  it("is unmistakably shorter than a living plant", () => {
+    // Both bounds matter. Too short and it is a speck; as tall as a living plant and the
+    // player cannot tell a failure from a slow starter.
+    const height = (p: Plant) =>
+      ORIGIN.y - Math.min(...p.segments.map((s) => s.y1));
+    const dead = height(albino);
+    const living = height(grow({ viable: true }));
+    expect(dead).toBeGreaterThan(35);
+    expect(dead).toBeLessThan(living * 0.45);
   });
 
   it("CONTROL: the identical genotype made viable grows a normal plant", () => {

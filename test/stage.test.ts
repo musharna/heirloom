@@ -29,6 +29,7 @@ const P: Phenotype = {
   hueClass: 0,
   white: false,
   bloomRadius: 14,
+  leafScale: 14,
   petalCount: 5,
   inflorescence: "solitary",
   viable: true,

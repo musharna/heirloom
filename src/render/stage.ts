@@ -47,6 +47,9 @@ export const PALETTE = {
   stemAlbino: "#c3b98a",
   stemAlbinoHi: "#ded4a2",
   stemAlbinoRim: "rgba(250,244,206,0.6)",
+  /** Cotyledons on an albino seedling — the same cream, a shade lighter than its stem. */
+  leafAlbino: "#cec48f",
+  leafAlbinoLit: "#e6dcaa",
   // Translucent, not opaque, so one pair of tones shades BOTH stem colours. Opaque bands
   // would need a matched pair per base colour, and every future colour would need two more.
   stemShade: "rgba(12,24,16,0.26)",
@@ -330,11 +333,11 @@ export function paintPlant(
       lf.attach.x - nx * half,
       lf.attach.y - ny * half,
     );
-    g.addColorStop(0, PALETTE.leafLit);
-    g.addColorStop(1, PALETTE.leaf);
+    g.addColorStop(0, plant.albino ? PALETTE.leafAlbinoLit : PALETTE.leafLit);
+    g.addColorStop(1, plant.albino ? PALETTE.leafAlbino : PALETTE.leaf);
     ctx.fillStyle = g;
     ctx.fill();
-    ctx.strokeStyle = PALETTE.leafRim;
+    ctx.strokeStyle = plant.albino ? PALETTE.stemAlbinoRim : PALETTE.leafRim;
     ctx.lineWidth = 1;
     ctx.stroke();
 

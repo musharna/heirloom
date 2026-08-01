@@ -399,3 +399,30 @@ describe("archive seeds", () => {
     expect(g.tray[0]!.origin).toBe("cross");
   });
 });
+
+describe("shownBlooms memoisation", () => {
+  // The cull is O(n^2) and runs from the FRAME LOOP, once per plot. Without memoisation a
+  // garden of flowery plants spends its whole frame budget deciding where to draw a hover ring.
+  it("returns the identical array when nothing has opened since last time", () => {
+    const p = { ...grow(g0(), 100, SOIL), plantedAt: 0 };
+    const a = shownBlooms(p, p.maxTick + 500);
+    const b = shownBlooms(p, p.maxTick + 500);
+    expect(b).toBe(a); // identity, not equality — a fresh array means it recomputed
+  });
+
+  it("still recomputes when more flowers have opened", () => {
+    // The positive control. Caching that never invalidates would pass the test above while
+    // freezing the garden's flowers at whatever was open the first time it was asked.
+    const p = { ...grow(g0(), 100, SOIL), plantedAt: 0 };
+    const early = shownBlooms(p, 1).length;
+    const late = shownBlooms(p, p.maxTick + 500).length;
+    expect(late).toBeGreaterThan(early);
+  });
+
+  it("recomputes when the clock runs backwards, as __seek can drive it", () => {
+    const p = { ...grow(g0(), 100, SOIL), plantedAt: 0 };
+    const late = shownBlooms(p, p.maxTick + 500).length;
+    const back = shownBlooms(p, 1).length;
+    expect(back).toBeLessThan(late);
+  });
+});

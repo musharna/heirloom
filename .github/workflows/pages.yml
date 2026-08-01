@@ -1,8 +1,13 @@
 name: pages
 
+# Runs on pull_request too, with only the `deploy` job withheld. The whole pipeline — build,
+# unit tests and the driver gate it calls — is therefore exercised BEFORE merge, on the same
+# file that will do the deploying. A gate first attempted on the push that ships is a gate
+# nobody has tested.
 on:
   push:
     branches: [m1-growth-spike]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -10,11 +15,13 @@ permissions:
   pages: write
   id-token: write
 
-# Never let two deploys race; cancel-in-progress is off so a queued deploy still lands
-# rather than being dropped when another push arrives.
+# Never let two deploys race; cancel-in-progress is off so a queued deploy still lands rather
+# than being dropped when another push arrives. Keyed by ref so that PR runs, which now use this
+# same workflow, cannot queue in front of a deploy — and a superseded PR run is cancelled,
+# because unlike a deploy it has nothing to land.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -52,6 +59,9 @@ jobs:
     # BOTH, and that is the point of this change: `build` proves the bundle compiles, `drivers`
     # proves the game it contains still responds to a pointer and still draws.
     needs: [build, drivers]
+    # The one job a pull request must NOT run. Everything above it does run on a PR, which is
+    # what makes the gate testable before it is trusted.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

@@ -9,13 +9,17 @@ name: drivers
 # regression deployed green, and the only thing standing between it and the live site was
 # somebody remembering to run `npm run drive` by hand.
 #
-# Reusable (`workflow_call`) so pages.yml can make the deploy WAIT for it rather than merely
-# running it alongside — and triggered on pull_request so it is observable before merge. It is
-# deliberately NOT triggered on push as well, or every push to the deploy branch would run it
-# twice for one answer.
+# `workflow_call` ONLY, with no trigger of its own. pages.yml is the single entry point and it
+# runs on pull_request as well as on push, so this fires exactly once per event either way — and,
+# more to the point, the CALL is exercised on every PR instead of being first attempted on the
+# push that deploys. Wiring that has never executed is not a gate.
+#
+# It was briefly `pull_request:` here plus a call from pages.yml, and the reason that is wrong is
+# worth keeping: actionlint reports a `uses: ./.github/workflows/...` pointing at a file that
+# DOES NOT EXIST as clean, exit 0. Verified by mutation. So nothing static was ever going to
+# tell us the gate was wired up; only running it does.
 
 on:
-  pull_request:
   workflow_call:
 
 permissions:

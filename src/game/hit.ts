@@ -102,7 +102,12 @@ export type TrayLayout = {
 /** Where tray slot `i` sits. Pure, so the renderer and the hit test cannot disagree. */
 export function traySlot(i: number, w: number, h: number): TrayLayout {
   const radius = 9;
-  const gap = 30;
+  // Derived, not fixed at 30. At TRAY_CAP 12 a fixed gap still fits the 360px minimum world —
+  // the row spans x=6 to x=354 — so this is not fixing a present bug. It removes the CLIFF: at
+  // 14 the row would be 390 wide in a 360 world, and the outermost seeds would sit off-screen,
+  // unclickable, with nothing on screen to say why. Deriving it means the cap above can be
+  // tuned without anyone having to rediscover that.
+  const gap = Math.min(30, (w - 40) / (TRAY_CAP - 1));
   const width = (TRAY_CAP - 1) * gap;
   return {
     x: w / 2 - width / 2 + i * gap,

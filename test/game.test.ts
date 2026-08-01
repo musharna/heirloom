@@ -354,3 +354,23 @@ describe("isGrown", () => {
     expect(isGrown(p, 10 + p.maxTick)).toBe(true);
   });
 });
+
+describe("tray geometry", () => {
+  it("keeps every slot inside the world at the narrowest layout", () => {
+    // MIN_W is 360, so this is the tightest the row will ever be asked to fit.
+    const w = 360;
+    for (let i = 0; i < TRAY_CAP; i++) {
+      const s = traySlot(i, w, 430);
+      expect(s.x - s.radius, `slot ${i} left`).toBeGreaterThanOrEqual(0);
+      expect(s.x + s.radius, `slot ${i} right`).toBeLessThanOrEqual(w);
+    }
+  });
+
+  it("still uses the full 30px gap on a desktop world", () => {
+    expect(traySlot(1, 1180, 470).x - traySlot(0, 1180, 470).x).toBeCloseTo(30);
+  });
+
+  it("holds twelve seeds", () => {
+    expect(TRAY_CAP).toBe(12);
+  });
+});

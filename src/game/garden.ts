@@ -84,8 +84,13 @@ export type Garden = {
  * Refusing would be the obvious alternative and it is wrong for this game: §11 fixes the
  * tone as pressure-free, and a full tray that rejects a cross turns a click into a failure
  * state. Evicting silently keeps every verb always available.
+ *
+ * Twelve rather than eight because the RATIO is what matters. 8 seeds against 6 plots and 12
+ * against 9 are both 1.3 seeds per plot — but with nine plots the tray also drains faster, so
+ * the same ratio buys more slack in practice. Raised after a play-through reported crosses
+ * piling up faster than they could be planted.
  */
-export const TRAY_CAP = 8;
+export const TRAY_CAP = 12;
 
 export function createGarden(plotXs: number[]): Garden {
   return {

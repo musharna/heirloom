@@ -1001,3 +1001,46 @@ every driver was aiming at where flowers used to be; `drive-forest` reported "de
 expected 5 and the cause read as a missing seed. **A hook that reports model coordinates for a
 transformed render is lying to every caller**, and it lies hardest exactly where the transform
 is strongest.
+
+## 26. The drivers run in CI — and building that found the bug it was built for
+
+Everything CI checked was `typecheck`, `test`, `build`. All three pass on a game that renders
+nothing, responds to no click and loses the garden on reload — the unit suite tests what
+`growPlant` **returns**, and every interaction and render defect this project has had lived
+downstream of that, in what reaches the canvas. So a render regression deployed green and the
+only thing between it and the live site was somebody remembering to type `npm run drive`.
+
+`.github/workflows/drivers.yml` now runs six drivers against a real production bundle in a real
+browser, and `pages.yml` **calls** it so the deploy has to wait for it. Running it alongside
+would report a regression after it had already shipped, which is a notification, not a gate.
+Free either way: standard runners on public repositories are unmetered, so the quota argument
+that retired double-runs in other repos does not apply here.
+
+### `vite preview` is not `vite build`
+
+The first run of the new job failed all six drivers on `window.__ready` — before it ever reached
+CI, on the local rehearsal. `vite.config.ts` gated `base` on `command === "build"`, and **`vite
+preview` runs with `command === "serve"`**. So the preview server mounted the production bundle
+at `/` while that bundle's `<script src>` was baked at `/heirloom/`. Every asset request fell
+through to the SPA index fallback and came back as **HTML with a 200**, the module never
+executed, and the page sat blank.
+
+Two things worth keeping from that. First, a 200 is not a success — the content type was the
+discriminator, and a check that only asked "did it load" saw six green requests for a page that
+never ran. Second, this is a defect **no test against the dev server can reach**, because the
+dev server is the one configuration where the old predicate was right. The fix is Vite's
+documented `isPreview`, compared against `true` explicitly because the docs warn some tools pass
+`undefined`.
+
+### What CI does not run, and why
+
+`check-phone.mjs` stays local. Its floors are a **population measured on one machine** under CDP
+CPU throttling, and a shared two-core runner is already several times slower before any throttle
+is applied. Porting them would be the fifth time in this project a threshold from one sample
+landed inside another's legitimate range — the failure mode this file has documented four times
+already. A frame-rate number is not portable across machines; what the other six assert is.
+
+`check-motion.mjs` does carry one frame-rate assertion (`> 30`), and it is in CI on purpose as
+an open question: it clears at 60.1 fps locally, and whether a headless runner clears it is
+exactly the kind of thing to learn from a real run rather than predict. If it proves noisy there
+the frame-rate concern moves out to `check-phone`, which owns the methodology.

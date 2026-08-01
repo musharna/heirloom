@@ -149,6 +149,10 @@ npm run dev &     # the drivers drive a real server
 npm run drive     # all seven, in order
 ```
 
+Six of them run in CI against a production build, and the deploy waits for them — typecheck,
+unit tests and a successful build all pass on a game that renders nothing and responds to no
+click, so before this a render regression shipped green.
+
 - `tools/drive-verbs.mjs` — clicks real flowers, asserts the four verbs fire
 - `tools/drive-forest.mjs` — retires plants, reads the background buffer's pixels back
 - `tools/drive-persist.mjs` — builds a garden, reloads the page, asserts it came back
@@ -164,12 +168,19 @@ Each driver carries negative controls, because a check that only ever passes pro
 clicking bare sky must yield no seed, clearing storage must produce a _different_ garden, and an
 empty background buffer must read as empty before any "it grew" assertion is trusted.
 
-They take a `GARDEN_URL`, so the same checks run against the deployed site rather than only
-against a dev server — a green CI run says the build succeeded, not that the site works:
+They take a `GARDEN_URL`, so the same checks run against the deployed site or against a local
+preview of the real production bundle, not only against a dev server:
 
 ```sh
 GARDEN_URL=https://musharna.github.io/heirloom/garden/ npm run drive
+
+npm run build && npm run preview &                      # what CI does
+GARDEN_URL=http://localhost:4173/heirloom/garden/ npm run drive
 ```
+
+`check-phone.mjs` is the one that stays local. Its floors are a population measured on one
+machine under CPU throttling, and a shared CI runner is several times slower before any throttle
+is applied — a frame-rate threshold does not travel between machines.
 
 Design and per-milestone outcomes, including what went wrong and why:
 `docs/superpowers/specs/2026-07-29-heirloom-modern-seed-design.md`.

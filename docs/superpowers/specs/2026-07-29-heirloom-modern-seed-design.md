@@ -1044,3 +1044,33 @@ already. A frame-rate number is not portable across machines; what the other six
 an open question: it clears at 60.1 fps locally, and whether a headless runner clears it is
 exactly the kind of thing to learn from a real run rather than predict. If it proves noisy there
 the frame-rate concern moves out to `check-phone`, which owns the methodology.
+
+### The gate had to be seen failing
+
+Two things were asserted about this gate that turned out to be worth nothing until tested.
+
+**`actionlint` reports a broken gate as clean.** Point `uses: ./.github/workflows/drivers.yml`
+at a file that does not exist and actionlint still exits 0 — verified by mutation. So a green
+lint said nothing at all about whether the deploy was actually wired to wait for anything.
+
+**Wiring first attempted on the push that deploys is wiring nobody has run.** `pages.yml` only
+triggered on push to the deploy branch, so the very first execution of the reusable-workflow
+call would have been the one shipping to the live site. It now runs on `pull_request` too with
+`deploy` alone withheld by `if: github.event_name != 'pull_request'`, and `drivers.yml` dropped
+its own trigger to become `workflow_call`-only — one definition, one run per event, and the call
+exercised on every PR.
+
+Then the gate was made to fail on purpose. The sway was disabled with a one-character mutation
+(`k` → `k * 0`), which **passes typecheck and all 332 unit tests** — exactly the class of
+regression the old pipeline deployed green. The run came back:
+
+```
+FAIL  the scene changes between frames with nothing touched — 0.00% of sampled channels moved
+build: success  ·  drivers / drive: failure  ·  deploy: SKIPPED
+```
+
+Failing **for the stated reason**, not incidentally, and blocking the deploy through the whole
+chain: driver exit 1 → step → called-workflow job → unsatisfied `needs` → no deploy. The
+failure-artifact upload fired too, so the screenshots of the broken frame were waiting in the
+run. On the real runner `check-motion` measures 60.1 fps, the same as locally, so its one
+frame-rate assertion stays where it is.

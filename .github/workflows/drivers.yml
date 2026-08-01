@@ -80,7 +80,7 @@ jobs:
       # A driver failure is a VISUAL failure most of the time, and "FAIL — coverage 0" does not
       # say what the screen looked like. The drivers already write PNGs; keep them.
       - if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: driver-shots
           path: shots/

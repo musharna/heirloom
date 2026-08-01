@@ -99,12 +99,24 @@ describe("computeLayout", () => {
     for (const g of gaps) expect(g).toBeCloseTo(gaps[0]!, 6);
   });
 
-  it("reproduces the hand-tuned desktop layout", () => {
-    // The 1180x470-ish world with six plots was arrived at by looking at renders, not by
-    // arithmetic. A generalisation that quietly changed it would be a regression.
+  it("gives a desktop world nine plots", () => {
+    // Six was reported as too few to hold a breeding project AND its seedlings: two parents
+    // held back leaves only four working slots, against a tight-linkage target that needs
+    // roughly seventeen gametes.
+    expect(computeLayout(1440, 900).plotXs.length).toBe(9);
+  });
+
+  it("reproduces the hand-tuned desktop world", () => {
+    // The 1180x470-ish world was arrived at by looking at renders, not by arithmetic, and a
+    // generalisation that quietly changed it would be a regression. The world and the 135px
+    // inset are still those hand-tuned values.
+    //
+    // The plot COUNT is not, deliberately: six was raised to nine when a play-through found
+    // the bed too small to hold a breeding project and its seedlings at once. That is a
+    // decision, not a silent drift, which is why the number here moved with it.
     const l = computeLayout(1440, 900);
     expect(l.W).toBe(MAX_W);
-    expect(l.plotXs).toHaveLength(6);
+    expect(l.plotXs).toHaveLength(9);
     expect(l.plotXs[0]).toBeCloseTo(135, 5);
   });
 
@@ -113,7 +125,8 @@ describe("computeLayout", () => {
     const l = computeLayout(412, 839);
     expect(l.W).toBeLessThan(500); // the world itself is narrow, not shrunk
     expect(l.H / l.W).toBeGreaterThan(0.9); // and not a letterbox strip
-    expect(l.plotXs.length).toBe(2);
+    // Three, up from two, for the same reason the desktop went six to nine.
+    expect(l.plotXs.length).toBe(3);
   });
 
   it("is deterministic", () => {

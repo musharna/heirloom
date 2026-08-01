@@ -963,7 +963,47 @@ function renderDrawer(): void {
     },
     { root: drawerEl },
   );
-  drawerEl.querySelectorAll("figure").forEach((f) => io.observe(f));
+  drawerEl.querySelectorAll("figure").forEach((f) => {
+    io.observe(f);
+    f.addEventListener("click", () =>
+      restoreFromDrawer((f as HTMLElement).dataset["code"]),
+    );
+    // Reachable without a pointer, since the figures are already focusable. The garden itself
+    // still is not, but a panel that IS keyboard-navigable should not throw that away.
+    f.addEventListener("keydown", (ev) => {
+      const key = (ev as KeyboardEvent).key;
+      if (key !== "Enter" && key !== " ") return;
+      ev.preventDefault();
+      restoreFromDrawer((f as HTMLElement).dataset["code"]);
+    });
+  });
+}
+
+/**
+ * Put a copy of an archived plant back in the tray.
+ *
+ * A COPY: the entry stays in the drawer. A drawer that emptied as it was used would recreate
+ * the loss it exists to remove.
+ *
+ * No parents, deliberately, and that is not an omission. A restored plant is an observation the
+ * player already made, not a new one — see `Origin`. The notebook files a cross only for a
+ * planting that HAS parents, so restoring the same flower five times cannot manufacture five
+ * independent proofs that its parent carries a recessive.
+ */
+function restoreFromDrawer(code: string | undefined): boolean {
+  if (!code) return false;
+  const parsed = parseGenome(code);
+  if (!parsed.ok) {
+    // Loud, per §10 and the shared-link path this mirrors: name what failed. A silent return
+    // would read as a dead click.
+    notice = `that drawer entry is unreadable — ${parsed.error}`;
+    return false;
+  }
+  garden = addSeed(garden, parsed.genome, { origin: "archive" });
+  notice = "a plant was taken back out of the drawer";
+  closeDrawer();
+  scheduleSave();
+  return true;
 }
 
 function openDrawer(): void {
@@ -1640,6 +1680,17 @@ Object.assign(window as unknown as Record<string, unknown>, {
     open: drawerOpen,
     entries: drawerEl.querySelectorAll("figure").length,
   }),
+  /**
+   * Restore the drawer's first entry.
+   *
+   * A hook rather than a click because the figures live in a SCROLLING panel: a driver aiming
+   * pointer coordinates at one would be testing the scroll position as much as the restore.
+   * The click path itself is exercised separately, by clicking a figure directly.
+   */
+  __restoreFirst: () => {
+    const first = drawerEl.querySelector("figure") as HTMLElement | null;
+    return first ? restoreFromDrawer(first.dataset["code"]) : false;
+  },
   /** A point on a plant's stem, for opening its card without hitting a flower. */
   __stemAt: (i: number) => {
     const occ = garden.plots[i]?.occupant;

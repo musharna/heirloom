@@ -165,6 +165,87 @@
         opacity: 1;
         background: none;
       }
+
+      /* The drawer. HTML for the same reason as the card: it is a browsable LIST, and a list
+         drawn into a canvas can be neither scrolled by the browser nor read aloud. Borrows the
+         card's palette deliberately — two panels over one small garden should read as one
+         voice, not two. */
+      /* A DOCK stacking the tab above the panel, rather than two independently-positioned
+         fixed elements. The first attempt had both at bottom:0 and the panel won the stacking
+         order, so an open drawer covered its own tab and the toggle only worked one way — a
+         Playwright click timed out with "#drawer intercepts pointer events". */
+      #drawer-dock {
+        position: fixed;
+        z-index: 6;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        /* The dock spans the full width at the bottom, which is exactly where the seed tray is
+           drawn. Transparent to the pointer so it cannot swallow a click meant for a seed;
+           its children opt back in. */
+        pointer-events: none;
+      }
+      #drawer-tab {
+        pointer-events: auto;
+        border-bottom: 0;
+        border-radius: 3px 3px 0 0;
+        opacity: 0.55;
+        padding: 3px 14px;
+      }
+      #drawer-tab:hover {
+        opacity: 1;
+      }
+      #drawer {
+        pointer-events: auto;
+        width: 100%;
+        box-sizing: border-box;
+        /* Bounded so the garden is never fully covered: the drawer is for choosing something
+           to put BACK, and a panel that hides the bed hides what you are choosing for. */
+        max-height: 46vh;
+        overflow-y: auto;
+        background: #141a1d;
+        border-top: 1px solid #33413a;
+        box-shadow: 0 -6px 22px rgb(0 0 0 / 55%);
+        padding: 12px;
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+        gap: 10px;
+      }
+      #drawer[hidden] {
+        display: none;
+      }
+      #drawer figure {
+        margin: 0;
+        cursor: pointer;
+        border: 1px solid #26312c;
+        border-radius: 3px;
+        padding: 4px;
+        text-align: center;
+      }
+      #drawer figure:hover,
+      #drawer figure:focus-visible {
+        border-color: #55705f;
+        outline: none;
+      }
+      #drawer figcaption {
+        font-size: 11px;
+        opacity: 0.6;
+        margin-top: 3px;
+      }
+      #drawer canvas {
+        width: 100%;
+        height: 84px;
+        display: block;
+      }
+      #drawer .empty {
+        grid-column: 1 / -1;
+        opacity: 0.55;
+        text-align: center;
+        padding: 14px;
+      }
     </style>
   </head>
   <body>
@@ -175,6 +256,12 @@
       <span id="code"></span>
     </div>
     <div id="card" hidden role="dialog" aria-label="plant"></div>
+    <div id="drawer-dock">
+      <button id="drawer-tab" aria-expanded="false" aria-controls="drawer">
+        drawer
+      </button>
+      <div id="drawer" hidden role="dialog" aria-label="retired plants"></div>
+    </div>
     <script type="module" src="./garden.ts"></script>
   </body>
 </html>

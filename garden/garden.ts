@@ -29,6 +29,7 @@ import {
 } from "../src/game/hit";
 import { computeLayout, layoutChanged, type Layout } from "../src/game/layout";
 import {
+  BACKGROUND_REPLAY,
   REPLAY_CAP,
   SAVE_KEY,
   fromSave,
@@ -241,7 +242,10 @@ if (stored) {
   const loaded = parsed === null ? null : fromSave(parsed, plotXs, SOIL);
   if (loaded?.ok) {
     garden = loaded.garden;
-    restored = loaded.replay;
+    // The background composites only the shallowest slice, because each entry it takes costs a
+    // full growPlant on load. The DRAWER keeps the whole list — it renders lazily, so depth
+    // there is free until someone scrolls to it.
+    restored = loaded.replay.slice(-BACKGROUND_REPLAY);
     notebook = loaded.notebook;
     retirementLog = loaded.replay.map((r) => ({
       g: serialize(r.genome),
@@ -651,7 +655,10 @@ function release(e: PointerEvent): void {
     if (on !== null && garden.plots[on]?.occupant) {
       inspecting = inspecting === on ? null : on;
       renderCard();
-    } else closeCard();
+    } else {
+      closeCard();
+      closeDrawer();
+    }
     return;
   }
   const travelled = Math.hypot(p.x - d.from.x, p.y - d.from.y);
@@ -901,6 +908,61 @@ function closeCard(): void {
   inspecting = null;
   cardEl.hidden = true;
 }
+
+/* ── The drawer ─────────────────────────────────────────────────────────────────────────── */
+
+const drawerEl = document.getElementById("drawer")!;
+const drawerTabEl = document.getElementById("drawer-tab")!;
+let drawerOpen = false;
+
+/**
+ * List every plant that has been retired, newest first.
+ *
+ * Newest first because the plant you just displaced is the one you are most likely to want
+ * back — the drawer exists because replacing a plant used to be irreversible.
+ *
+ * The list is `retirementLog`, which was already being kept and already being saved; §7 built
+ * it to regenerate the background. Nothing new is stored to make this work.
+ */
+function renderDrawer(): void {
+  drawerTabEl.setAttribute("aria-expanded", drawerOpen ? "true" : "false");
+  if (!drawerOpen) {
+    drawerEl.hidden = true;
+    return;
+  }
+  drawerEl.hidden = false;
+  if (retirementLog.length === 0) {
+    drawerEl.innerHTML =
+      '<p class="empty">nothing retired yet — plant over a flower and it will keep here</p>';
+    return;
+  }
+  drawerEl.innerHTML = retirementLog
+    .map(
+      (e) =>
+        `<figure data-code="${esc(e.g)}" tabindex="0">` +
+        `<canvas width="192" height="168"></canvas>` +
+        `<figcaption>${esc(shortLabel(e.g))}</figcaption></figure>`,
+    )
+    .reverse()
+    .join("");
+}
+
+function openDrawer(): void {
+  drawerOpen = true;
+  // Two panels over one small garden is one too many.
+  closeCard();
+  renderDrawer();
+}
+
+function closeDrawer(): void {
+  drawerOpen = false;
+  renderDrawer();
+}
+
+drawerTabEl.addEventListener("click", () => {
+  if (drawerOpen) closeDrawer();
+  else openDrawer();
+});
 
 cardEl.addEventListener("pointerdown", (e) => {
   // Only the close button acts; clicks on the text must not fall through to the canvas.
@@ -1549,6 +1611,16 @@ Object.assign(window as unknown as Record<string, unknown>, {
   }),
   /** The card's visible text, so a driver asserts what the PLAYER sees, not internal state. */
   __card: () => (cardEl.hidden ? null : cardEl.textContent),
+  /**
+   * The drawer as the player sees it: is it open, and how many entries are actually IN THE DOM.
+   *
+   * Counting rendered figures rather than `retirementLog.length` on purpose — the latter would
+   * report entries the panel failed to draw, which is exactly the bug a driver is here to catch.
+   */
+  __drawer: () => ({
+    open: drawerOpen,
+    entries: drawerEl.querySelectorAll("figure").length,
+  }),
   /** A point on a plant's stem, for opening its card without hitting a flower. */
   __stemAt: (i: number) => {
     const occ = garden.plots[i]?.occupant;

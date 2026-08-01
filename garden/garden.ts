@@ -980,7 +980,7 @@ function paintSwaying(
     // Blended toward the ground, which dims and desaturates in one operation — the same cue
     // the background forest uses, at a fraction of the strength.
     ctx.globalAlpha = d.alpha;
-    applySway(ctx, k, base.y0);
+    applySway(ctx, k * 0, base.y0); // MUTANT — temporary, reverted in the next commit
   }
   // Cached once the plant has stopped changing. `maxTick` is when the last SEGMENT is drawn;
   // flowers keep opening for a while after that, so the settle point is later than "grown".

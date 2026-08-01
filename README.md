@@ -206,3 +206,13 @@ is applied — a frame-rate threshold does not travel between machines.
 
 Design and per-milestone outcomes, including what went wrong and why:
 `docs/superpowers/specs/2026-07-29-heirloom-modern-seed-design.md`.
+
+Milestone history, including the reverts: [`CHANGELOG.md`](CHANGELOG.md).
+
+## Licence
+
+[MIT](LICENSE). Take it apart, grow something else from it.
+
+_Seed_ is noio's. This is a de novo reimplementation built from playing it and from what has been
+written about it — no original code, art or assets were used, and the licence above covers this
+work only.

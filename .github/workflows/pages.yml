@@ -41,8 +41,17 @@ jobs:
         with:
           path: dist
 
+  # The behavioural drivers, defined once in drivers.yml and CALLED here so the deploy has to
+  # wait for them. Running them alongside the deploy would report a regression after it had
+  # already shipped, which is a notification, not a gate. Runs concurrently with `build`, so it
+  # costs wall time only where it exceeds the build's.
+  drivers:
+    uses: ./.github/workflows/drivers.yml
+
   deploy:
-    needs: build
+    # BOTH, and that is the point of this change: `build` proves the bundle compiles, `drivers`
+    # proves the game it contains still responds to a pointer and still draws.
+    needs: [build, drivers]
     runs-on: ubuntu-latest
     environment:
       name: github-pages

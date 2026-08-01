@@ -22,7 +22,7 @@ import {
 } from "../src/game/hit";
 import { genomesEqual, randomGenome, type Genome } from "../src/genome/genome";
 import { isWhite } from "../src/genome/express";
-import { genomeSeed } from "../src/genome/serialize";
+import { genomeSeed, serialize } from "../src/genome/serialize";
 
 const SOIL = 400;
 const XS = [100, 300, 500, 700, 900];
@@ -372,5 +372,30 @@ describe("tray geometry", () => {
 
   it("holds twelve seeds", () => {
     expect(TRAY_CAP).toBe(12);
+  });
+});
+
+describe("archive seeds", () => {
+  it("carries an origin but no parents, so it can never become evidence", () => {
+    // The notebook files a cross only for a planting that HAS parents
+    // (garden/garden.ts). A restored plant is an observation the player already made, not a
+    // new one — counting it again would manufacture proof that its parent carries a recessive.
+    const g = addSeed(fresh(), g0(), { origin: "archive" });
+    expect(g.tray[0]!.origin).toBe("archive");
+    expect(g.tray[0]!.parents).toBeUndefined();
+  });
+
+  it("still records parents for a real cross", () => {
+    // POSITIVE CONTROL. Without it, an addSeed that dropped provenance entirely would make
+    // the assertion above pass while silently breaking every deduction in the game.
+    const rand = mulberry32(11);
+    const a = randomGenome(rand);
+    const b = randomGenome(rand);
+    const g = addSeed(fresh(), a, {
+      parents: [serialize(a), serialize(b)],
+      origin: "cross",
+    });
+    expect(g.tray[0]!.parents).toEqual([serialize(a), serialize(b)]);
+    expect(g.tray[0]!.origin).toBe("cross");
   });
 });

@@ -12,8 +12,14 @@ import type { Plant } from "../types";
  * can never reveal what that parent is hiding, while a self-cross is the one move that
  * reliably does. A card that could not tell them apart would leave the player unable to learn
  * the single most useful thing about the four verbs.
+ *
+ * `archive` is a plant restored from the drawer. Distinct from `clone` because cloning
+ * MUTATES — a cloned entry would hand back a different flower than the one the player picked
+ * out of the drawer, which is the one thing a drawer must not do. Distinct from `founder`
+ * because that asserts a plant with no history, and this one has plenty; it simply is not a
+ * NEW observation, so it carries no parents and never reaches the notebook.
  */
-export type Origin = "founder" | "clone" | "self" | "cross";
+export type Origin = "founder" | "clone" | "self" | "cross" | "archive";
 
 /**
  * A seed. Carries a genome and its PROVENANCE — never its traits.
@@ -117,11 +123,26 @@ export function grow(genome: Genome, x: number, soilY: number): Planting {
   return { genome, plant, plantedAt: 0, maxTick };
 }
 
-export function addSeed(g: Garden, genome: Genome, from?: Provenance): Garden {
+/**
+ * Put a seed in the tray.
+ *
+ * `from.parents` is OPTIONAL rather than required, so an `archive` restore can declare where it
+ * came from without claiming a cross that never happened. One code path rather than a separate
+ * `addArchiveSeed`, which would duplicate the eviction rule above and let the two drift.
+ */
+export function addSeed(
+  g: Garden,
+  genome: Genome,
+  from?: { parents?: [string, string]; origin: Origin },
+): Garden {
   const seed: Seed = {
     id: g.nextSeedId,
     genome,
-    ...(from ? { parents: from.parents, origin: from.origin } : {}),
+    // Keys OMITTED when absent, not set to undefined: `parents: undefined` is a key that
+    // survives an object spread and reads as "this was considered and is empty" rather than
+    // "this never applied".
+    ...(from?.parents ? { parents: from.parents } : {}),
+    ...(from ? { origin: from.origin } : {}),
   };
   const tray = [...g.tray, seed];
   return {

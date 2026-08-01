@@ -349,13 +349,31 @@ let receding: {
 // Rebuild the background from the replay list rather than from a stored image (§7). Genomes
 // are re-expressed and re-grown, which is what lets a saved garden survive a change to the
 // growth engine or the renderer — a stored bitmap would pin every past plant to the code that
-// drew it. Costs one growPlant per entry, capped at REPLAY_CAP.
-for (const entry of restored) {
-  forest.retire(
-    grow(entry.genome, clampToBed(entry.x), SOIL).plant,
-    genomeSeed(entry.genome),
-  );
+// drew it. Costs one growPlant per entry, capped at BACKGROUND_REPLAY.
+//
+// DRAINED ACROSS FRAMES, not in one pass. As a synchronous top-level loop this ran before
+// `__ready` was ever set, so it was not merely slow, it was BLOCKING: measured 152ms to
+// interactive on a fresh garden against ~1.6s once a background existed — and flat between 60
+// and 150 retirements, which is the cap doing exactly what it says. Every returning player paid
+// that on every load, to redraw something they had already seen.
+//
+// Order is preserved because it is load-bearing: the forest layers by retirement order and
+// `remainingContrast` keys off the count, so shuffling would change how the wash accumulates.
+const restoreQueue = restored.slice();
+
+function drainRestore(): void {
+  const deadline = performance.now() + 6;
+  while (restoreQueue.length > 0 && performance.now() < deadline) {
+    const entry = restoreQueue.shift()!;
+    forest.retire(
+      grow(entry.genome, clampToBed(entry.x), SOIL).plant,
+      genomeSeed(entry.genome),
+    );
+  }
+  if (restoreQueue.length > 0) requestAnimationFrame(drainRestore);
 }
+
+if (restoreQueue.length > 0) requestAnimationFrame(drainRestore);
 
 /** A retired plant's x may predate a narrower world; keep it on the bed. */
 function clampToBed(x: number): number {
@@ -1714,6 +1732,15 @@ Object.assign(window as unknown as Record<string, unknown>, {
    * Counting rendered figures rather than `retirementLog.length` on purpose — the latter would
    * report entries the panel failed to draw, which is exactly the bug a driver is here to catch.
    */
+  /**
+   * Retired plants still waiting to be composited into the background on load.
+   *
+   * `__ready` now means "the garden responds", which is what a player cares about, and the
+   * background finishes filling in behind it. A driver that asserts on background PIXELS has to
+   * wait for this to reach 0 — otherwise it races the drain and fails intermittently, which is
+   * worse than being slow.
+   */
+  __restorePending: () => restoreQueue.length,
   __drawer: () => ({
     open: drawerOpen,
     entries: drawerEl.querySelectorAll("figure").length,

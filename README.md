@@ -167,9 +167,11 @@ npm run dev &     # the drivers drive a real server
 npm run drive     # all eight, in order
 ```
 
-Six of them run in CI against a production build, and the deploy waits for them — typecheck,
+Seven of them run in CI against a production build, and the deploy waits for them — typecheck,
 unit tests and a successful build all pass on a game that renders nothing and responds to no
-click, so before this a render regression shipped green.
+click, so before this a render regression shipped green. Every `drive-*.mjs` is picked up by a
+glob rather than named in a list, because the list is what went wrong: `drive-drawer.mjs` was
+written after the workflow and shipped ungated, and nothing compared the two.
 
 - `tools/drive-verbs.mjs` — clicks real flowers, asserts the four verbs fire
 - `tools/drive-forest.mjs` — retires plants, reads the background buffer's pixels back

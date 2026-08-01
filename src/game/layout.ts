@@ -16,8 +16,24 @@ export type Layout = {
   plotXs: number[];
 };
 
-/** Horizontal room one plant needs before its canopy starts colliding with a neighbour. */
-export const MIN_PLOT_WIDTH = 175;
+/**
+ * Horizontal room one plant needs before its canopy starts colliding with a neighbour.
+ *
+ * Was 175, and that number was measured when the bed was a FLAT PLANE. `src/render/bed.ts`
+ * gave the bed depth in a later milestone, and `paintOrder` now paints plots furthest-first,
+ * so a nearer plant OCCLUDES a further one instead of interpenetrating it. Overlap that used
+ * to read as collision now reads as depth — which is what makes tighter packing available
+ * without shrinking a single plant.
+ *
+ * 110 rather than a rounder number because it is what yields nine plots on a 1180 world:
+ * floor(910 / 110) + 1 = 9. At 115 the same formula gives 8.
+ *
+ * Do NOT buy plots by scaling plants down instead. The bed runs scale 1.00-0.86 against the
+ * forest's 0.82-0.64, and that 0.86/0.82 gap is what keeps live plants legible as the subject;
+ * a global 0.85 would put the bed's far end at 0.73, inside the forest, and the two would read
+ * as one continuous field.
+ */
+export const MIN_PLOT_WIDTH = 110;
 /** Room below the soil surface for the seed tray to sit ON the dirt rather than under it. */
 export const SOIL_BAND = 80;
 
@@ -42,7 +58,7 @@ export const MIN_H = 430;
 export const MAX_H = 470;
 
 export const MIN_PLOTS = 2;
-export const MAX_PLOTS = 6;
+export const MAX_PLOTS = 9;
 
 const clamp = (v: number, lo: number, hi: number): number =>
   Math.min(hi, Math.max(lo, v));

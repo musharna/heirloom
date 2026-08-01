@@ -101,6 +101,24 @@ Growth is seeded from a hash of the genome alone, so that link grows the same pl
 The checksum matters because the packing is dense — every bit pattern is a legal genome, so
 without it a mistyped link would silently hand back the wrong flower instead of an error.
 
+## The drawer
+
+Planting over a flower used to end it: the plant receded into the background and there was no
+way back. Now every plant you replace keeps. The tab at the bottom of the screen opens a drawer
+of everything you have retired, newest first, each shown as the flower it actually was — the
+thumbnail is grown from the same genome, so it is that plant and not something like it.
+
+Clicking one puts a **copy** back in your tray. The entry stays where it is, because a drawer
+that emptied as you used it would recreate the loss it exists to remove.
+
+Restoring is not a new observation, and the field notebook knows it. Bringing the same flower
+back five times does not produce five proofs that its parent was hiding something — the
+deductions stay honest.
+
+Nothing new is stored to make this work. The garden already kept the genome of every retired
+plant, to rebuild the background; the drawer just shows you that list. So a garden you grew
+before this existed opens with its history already in it.
+
 ## Starting over
 
 The garden saves itself and comes back when you return. To wipe it and start fresh, add `#new`
@@ -146,13 +164,15 @@ driver that runs the real thing in a real browser:
 
 ```sh
 npm run dev &     # the drivers drive a real server
-npm run drive     # all seven, in order
+npm run drive     # all eight, in order
 ```
 
 - `tools/drive-verbs.mjs` — clicks real flowers, asserts the four verbs fire
 - `tools/drive-forest.mjs` — retires plants, reads the background buffer's pixels back
 - `tools/drive-persist.mjs` — builds a garden, reloads the page, asserts it came back
 - `tools/drive-notebook.mjs` — selfs a plant, grows the seedling, reads the card
+- `tools/drive-drawer.mjs` — retires plants, reopens them from the drawer, checks the thumbnails
+  are different plants and that a restore adds no false evidence
 - `tools/check-motion.mjs` — asserts the scene moves, the geometry does not, and it runs at 60fps
 - `tools/check-phone.mjs` — mobile viewport under CPU throttling, with measured floors
 - `npm run soak` — plays hundreds of rounds; watches save size, heap and frame rate

@@ -26,7 +26,11 @@ not designed here.
 
 ## §1 — More plots
 
-`MIN_PLOT_WIDTH: 175 -> ~115`, `MAX_PLOTS: 6 -> 9`, at **full plant size**.
+`MIN_PLOT_WIDTH: 175 -> 110`, `MAX_PLOTS: 6 -> 9`, at **full plant size**.
+
+> **Corrected during implementation.** This section first said `~115`, which yields **eight**
+> plots, not nine: `floor(910 / 115) + 1 = 8`. Nine needs 110. The number was written without
+> running the formula it was derived from.
 
 The 175 is documented as the room a canopy needs before colliding with a neighbour. That was
 measured when the bed was a flat plane. `src/render/bed.ts` gave the bed depth in a later
@@ -37,6 +41,17 @@ constant that sets the plot count therefore predates the mechanism that makes it
 That is a hypothesis about rendering, not a fact, so it gets measured: `npm run measure`
 renders depth cues with one genome in every plot precisely so genetics cannot be mistaken for
 position. If nine at full size reads as clutter, fall back to eight.
+
+**Outcome.** Nine shipped. `npm run measure` reported `drawn size vs depth = -1` — the reliable
+cue, perfect — across three genomes, and the **six-plot baseline already had 5 of 5 adjacent
+pairs overlapping**, so nine adds more of what was there rather than a new failure mode. All
+eight drivers pass, including `drive-verbs` in the tighter bed, and frame rate did not move:
+60.2 fps with 280 flowers.
+
+One honest limit on that comparison: `measure-depth` reads its genome from the running garden,
+and changing the plot count re-sows founders, so the six- and nine-plot renders differ by genome
+as well as by count. The pair-overlap figures are comparable; the two images are not a
+controlled A/B.
 
 ### Do not solve this by scaling plants down
 
@@ -71,9 +86,15 @@ const gap = Math.min(30, (w - 40) / (TRAY_CAP - 1));
 ```
 
 Today the gap is hardcoded at 30, making the row `(TRAY_CAP - 1) * 30` wide. At 12 slots that
-is 330px, which fits a 360-wide phone with 12px to spare; at 14 it would not fit at all.
-Desktop is unchanged; narrow screens tighten rather than overflow. The function stays pure and
-shared between renderer and hit test, which is why it exists.
+is 330px, which fits a 360-wide phone; at 14 it would not fit at all. Desktop is unchanged;
+narrow screens tighten rather than overflow. The function stays pure and shared between
+renderer and hit test, which is why it exists.
+
+> **Corrected during implementation.** This was written as though the fixed gap broke at
+> twelve. It does not: at `TRAY_CAP = 12` the row spans x=6 to x=354 in a 360px world and fits
+> fine. The derived gap is **insurance, not a repair** — it removes the silent cliff at 14,
+> where the outermost seeds would sit off-screen and unclickable with nothing to explain why.
+> Worth having so the cap stays tunable; but calling it a fix overstated it.
 
 Twelve because the **ratio** is what matters. 8 seeds against 6 plots is 1.3 per plot; 12
 against 9 is the same 1.3 — but with nine plots the tray also drains faster.
@@ -110,6 +131,17 @@ already ordered by retirement. Raise `REPLAY_CAP` from 60 and the drawer is that
 **`SAVE_VERSION` stays at 2.** No schema change; existing saves load untouched and arrive with
 their history intact rather than starting empty.
 
+> **Corrected during implementation — the cost model was wrong.** Raising `REPLAY_CAP` was
+> justified here on storage size (~3KB), but storage was never the constraint. §7 regenerates
+> the background from this list rather than storing an image, so **every entry composited costs
+> a full `growPlant` on load** — that is what sized the cap at 60 in the first place. Tripling
+> it would have tripled load work.
+>
+> Resolved by separating the two consumers, which want opposite things from one list: a new
+> `BACKGROUND_REPLAY = 60` caps what the background composites, leaving load time exactly as it
+> was, while `REPLAY_CAP = 200` governs only how far back the drawer can reach. The drawer
+> renders lazily, so depth there is free until someone scrolls to it.
+
 ### Thumbnails
 
 Each entry shows the actual flower — a list of 14-character codes is useless for choosing.
@@ -140,19 +172,34 @@ deletion. None were asked for.
 
 ## Testing
 
-A seventh driver, `tools/drive-drawer.mjs`:
+A fifth behavioural driver, `tools/drive-drawer.mjs` — fifteen checks, controls first:
 
-- retire plants, open the drawer, assert thumbnails paint **non-blank** pixels;
-- restore an entry, assert the grown plant is genetically identical to the original;
-- negative controls, per existing convention: an empty drawer must read as empty _before_ any
-  "it has entries" assertion is trusted, and a restore must **not** increment the notebook's
-  evidence count.
+- a fresh garden must read as empty, and an unopened drawer must have **no canvases**, before
+  any "it has entries" assertion is trusted;
+- retire plants from **different plots**, so thumbnails come from distinct genomes — assert not
+  only that they paint non-blank pixels but that their pixel counts **differ**, which is what
+  catches "every entry drew the same plant";
+- restore an entry, assert the tray grows and the entry **survives** being taken;
+- exercise the click path separately from the `__restoreFirst` hook, since the hook skips the
+  DOM listener entirely;
+- a restore must **not** increment the notebook's evidence count.
 
-That last assertion is written and **seen failing against un-fixed code** before the `archive`
-exclusion is wired. A test never seen fail proves nothing.
+> **Corrected during implementation.** That last assertion **cannot** be "seen failing against
+> un-fixed code", as this section claimed. The notebook files only plantings that have parents
+> and an archive seed has none, so the exclusion holds **by construction** — the test passes
+> immediately. It is a regression guard, and its worth was established by **mutation** instead:
+> deleting the parents clause from the filing loop makes exactly that check and its control
+> fail with exit 1 while the other thirteen still pass. Reverted, confirmed byte-identical.
+>
+> The mutation also surfaced a fragility worth recording: a parentless cross does not merely
+> inflate a count, it makes `carriedBy` **throw** reading `cross.parents[0]`. The driver's
+> notebook read is defensive for that reason — otherwise the mutation kills the page and
+> reports a stack trace instead of a named failure. The same fragility covers share-link seeds,
+> which are also parentless.
 
-Unit tests cover the pure parts: cap eviction order, `archive` excluded from `carriedBy` and
-`offspringCount`, and tray gap derivation at both 360 and 1180.
+Unit tests cover the pure parts: `fitPlant`'s aspect fitting, centring, origin offset and its
+degenerate all-zero-bounds case; `archive` seeds carrying no parents, with a real cross as the
+positive control in the same file; and tray geometry at both 360 and 1180.
 
 ### Dependency
 

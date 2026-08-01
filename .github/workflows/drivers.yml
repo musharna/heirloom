@@ -64,16 +64,36 @@ jobs:
           echo "::error::the preview server never served $GARDEN_URL"
           exit 1
 
-      # Behaviour only. The two PERFORMANCE drivers stay local on purpose:
+      # Behaviour only. The PERFORMANCE driver stays local on purpose:
       # `tools/check-phone.mjs` asserts frame-rate floors measured as a population on one
       # machine under CDP CPU throttling, and a shared two-core runner is already several times
       # slower before any throttle is applied. Porting those floors here would be the fifth
       # time in this project a threshold from one machine's sample landed inside another's
-      # legitimate range. A frame-rate number is not portable; what these six assert is.
-      - run: node tools/drive-verbs.mjs
-      - run: node tools/drive-forest.mjs
-      - run: node tools/drive-persist.mjs
-      - run: node tools/drive-notebook.mjs
+      # legitimate range. A frame-rate number is not portable; what these assert is.
+      #
+      # GLOBBED, not enumerated. This list was written before `drive-drawer.mjs` existed and
+      # nothing noticed: the drawer shipped to the live site with its driver ungated, because
+      # gating a new driver meant remembering to edit a second list that no check compares
+      # against the first. `drive-*` is behavioural and runs here; `check-*` is judged one at a
+      # time, because portability is the whole question for those.
+      #
+      # The floor is the point. A glob that matches nothing is an empty gate that reports
+      # success, which is the same failure in a new costume — so assert the count first.
+      - name: the behavioural drivers
+        run: |
+          shopt -s nullglob
+          drivers=(tools/drive-*.mjs)
+          echo "found ${#drivers[@]}: ${drivers[*]}"
+          if [ "${#drivers[@]}" -lt 5 ]; then
+            echo "::error::expected at least 5 behavioural drivers, found ${#drivers[@]}"
+            exit 1
+          fi
+          for d in "${drivers[@]}"; do
+            echo "::group::$d"
+            node "$d"
+            echo "::endgroup::"
+          done
+
       - run: node tools/check-motion.mjs
       - run: node tools/check-viewports.mjs
 

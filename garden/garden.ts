@@ -925,10 +925,43 @@ let drawerOpen = false;
  * The list is `retirementLog`, which was already being kept and already being saved; §7 built
  * it to regenerate the background. Nothing new is stored to make this work.
  */
+/**
+ * Thumbnails waiting to be painted, drained a few per frame.
+ *
+ * Painting them all in the IntersectionObserver callback stalled for 1.0-1.7s, measured: a
+ * full-width 46vh grid has ~33 cells visible at once, and each one GROWS a plant. "Lazy" bought
+ * a bound on the total, not on the size of any single stall.
+ */
+const thumbQueue: HTMLElement[] = [];
+let pumping = false;
+let drawerIO: IntersectionObserver | null = null;
+
+function pumpThumbs(): void {
+  const deadline = performance.now() + 6; // leave most of a 16.7ms frame for the garden
+  while (thumbQueue.length > 0 && performance.now() < deadline) {
+    const fig = thumbQueue.shift()!;
+    if (!fig.isConnected) continue;
+    const canvas = fig.querySelector("canvas");
+    const code = fig.dataset["code"];
+    if (canvas && code) paintThumb(canvas, code);
+  }
+  if (thumbQueue.length > 0) requestAnimationFrame(pumpThumbs);
+  else pumping = false;
+}
+
 function renderDrawer(): void {
   drawerTabEl.setAttribute("aria-expanded", drawerOpen ? "true" : "false");
+  // Always start from nothing: a stale observer would keep watching detached figures, and a
+  // stale queue would paint into canvases that are no longer on the page.
+  drawerIO?.disconnect();
+  drawerIO = null;
+  thumbQueue.length = 0;
   if (!drawerOpen) {
     drawerEl.hidden = true;
+    // RELEASE the panel. Its canvases are 192x168 each, and their backing store does not live
+    // in the JS heap — 120 entries measured as ~15MB still held after closing, climbing with
+    // every session and never coming back. `hidden` stops it being drawn, not being allocated.
+    drawerEl.innerHTML = "";
     return;
   }
   drawerEl.hidden = false;
@@ -955,14 +988,19 @@ function renderDrawer(): void {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         const fig = entry.target as HTMLElement;
-        const canvas = fig.querySelector("canvas");
-        const code = fig.dataset["code"];
-        if (canvas && code) paintThumb(canvas, code);
+        // QUEUED, not painted here. Growing ~33 plants inside one callback is a single long
+        // frame, and a one-second freeze on opening a panel reads as the whole game being slow.
+        thumbQueue.push(fig);
         obs.unobserve(fig);
+      }
+      if (!pumping && thumbQueue.length > 0) {
+        pumping = true;
+        requestAnimationFrame(pumpThumbs);
       }
     },
     { root: drawerEl },
   );
+  drawerIO = io;
   drawerEl.querySelectorAll("figure").forEach((f) => {
     io.observe(f);
     f.addEventListener("click", () =>

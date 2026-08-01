@@ -1,4 +1,4 @@
-import type { Bloom, Vec2 } from "../types";
+import type { Bloom, Plant, Vec2 } from "../types";
 import { cullOccludedBlooms } from "../render/stage";
 import { isGrown, TRAY_CAP, type Garden, type Planting } from "./garden";
 
@@ -9,6 +9,27 @@ import { isGrown, TRAY_CAP, type Garden, type Planting } from "./garden";
 export type BloomHit = { plotIndex: number; bloom: Bloom };
 
 /**
+ * Memoised culls, keyed on the plant.
+ *
+ * `cullOccludedBlooms` is O(n²) — it compares every bloom against every bloom it has kept — and
+ * `shownBlooms` is called from the FRAME LOOP, once per plot, to decide where to draw the hover
+ * ring. Measured on the real function: 100 blooms costs 0.17ms, 400 costs 1.19ms, 800 costs
+ * 3.69ms. Times nine plots that is 1.5ms, 10.7ms and 33.2ms PER FRAME against a 16.7ms budget,
+ * so a garden of well-bred flowery plants falls off 60fps purely to draw a ring.
+ *
+ * The cull is a pure function of the plant's geometry and how far it has grown. It does not
+ * depend on the pointer, so recomputing it sixty times a second was never necessary. This is
+ * the same fix, and the same WeakMap-on-Plant shape, that `paintPlantCached` already applies to
+ * the PICTURE for the same reason.
+ *
+ * Keyed on the count of open blooms rather than on the tick: the open set grows MONOTONICALLY
+ * with age (every bloom has a fixed tick), so an equal count means an identical set. That makes
+ * the check O(n) instead of O(n²), and it stays correct when the clock is driven backwards by
+ * `__seek` — a shrinking set changes the count and recomputes.
+ */
+const culled = new WeakMap<Plant, { count: number; blooms: Bloom[] }>();
+
+/**
  * Blooms a plant is currently SHOWING.
  *
  * Two filters, and both matter. `cullOccludedBlooms` is what the renderer draws, so hit
@@ -17,7 +38,12 @@ export type BloomHit = { plotIndex: number; bloom: Bloom };
  */
 export function shownBlooms(p: Planting, now: number): Bloom[] {
   const age = now - p.plantedAt;
-  return cullOccludedBlooms(p.plant.blooms.filter((b) => b.tick <= age));
+  const open = p.plant.blooms.filter((b) => b.tick <= age);
+  const hit = culled.get(p.plant);
+  if (hit && hit.count === open.length) return hit.blooms;
+  const blooms = cullOccludedBlooms(open);
+  culled.set(p.plant, { count: open.length, blooms });
+  return blooms;
 }
 
 /**

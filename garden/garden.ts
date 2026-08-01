@@ -40,6 +40,7 @@ import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
 import { paintPlantCached } from "../src/render/cache";
+import { paintThumb } from "../src/render/thumb";
 import {
   RECEDE_TICKS,
   applyPlacement,
@@ -945,6 +946,24 @@ function renderDrawer(): void {
     )
     .reverse()
     .join("");
+
+  // Painted LAZILY, and once each. Growing and painting 200 plants the moment the drawer opens
+  // would stall the frame; growing the eight actually on screen does not. Each figure is
+  // unobserved as soon as it paints, so scrolling back over it costs nothing.
+  const io = new IntersectionObserver(
+    (entries, obs) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const fig = entry.target as HTMLElement;
+        const canvas = fig.querySelector("canvas");
+        const code = fig.dataset["code"];
+        if (canvas && code) paintThumb(canvas, code);
+        obs.unobserve(fig);
+      }
+    },
+    { root: drawerEl },
+  );
+  drawerEl.querySelectorAll("figure").forEach((f) => io.observe(f));
 }
 
 function openDrawer(): void {

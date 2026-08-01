@@ -1001,3 +1001,76 @@ every driver was aiming at where flowers used to be; `drive-forest` reported "de
 expected 5 and the cause read as a missing seed. **A hook that reports model coordinates for a
 transformed render is lying to every caller**, and it lies hardest exactly where the transform
 is strongest.
+
+## 26. The drivers run in CI — and building that found the bug it was built for
+
+Everything CI checked was `typecheck`, `test`, `build`. All three pass on a game that renders
+nothing, responds to no click and loses the garden on reload — the unit suite tests what
+`growPlant` **returns**, and every interaction and render defect this project has had lived
+downstream of that, in what reaches the canvas. So a render regression deployed green and the
+only thing between it and the live site was somebody remembering to type `npm run drive`.
+
+`.github/workflows/drivers.yml` now runs six drivers against a real production bundle in a real
+browser, and `pages.yml` **calls** it so the deploy has to wait for it. Running it alongside
+would report a regression after it had already shipped, which is a notification, not a gate.
+Free either way: standard runners on public repositories are unmetered, so the quota argument
+that retired double-runs in other repos does not apply here.
+
+### `vite preview` is not `vite build`
+
+The first run of the new job failed all six drivers on `window.__ready` — before it ever reached
+CI, on the local rehearsal. `vite.config.ts` gated `base` on `command === "build"`, and **`vite
+preview` runs with `command === "serve"`**. So the preview server mounted the production bundle
+at `/` while that bundle's `<script src>` was baked at `/heirloom/`. Every asset request fell
+through to the SPA index fallback and came back as **HTML with a 200**, the module never
+executed, and the page sat blank.
+
+Two things worth keeping from that. First, a 200 is not a success — the content type was the
+discriminator, and a check that only asked "did it load" saw six green requests for a page that
+never ran. Second, this is a defect **no test against the dev server can reach**, because the
+dev server is the one configuration where the old predicate was right. The fix is Vite's
+documented `isPreview`, compared against `true` explicitly because the docs warn some tools pass
+`undefined`.
+
+### What CI does not run, and why
+
+`check-phone.mjs` stays local. Its floors are a **population measured on one machine** under CDP
+CPU throttling, and a shared two-core runner is already several times slower before any throttle
+is applied. Porting them would be the fifth time in this project a threshold from one sample
+landed inside another's legitimate range — the failure mode this file has documented four times
+already. A frame-rate number is not portable across machines; what the other six assert is.
+
+`check-motion.mjs` does carry one frame-rate assertion (`> 30`), and it is in CI on purpose as
+an open question: it clears at 60.1 fps locally, and whether a headless runner clears it is
+exactly the kind of thing to learn from a real run rather than predict. If it proves noisy there
+the frame-rate concern moves out to `check-phone`, which owns the methodology.
+
+### The gate had to be seen failing
+
+Two things were asserted about this gate that turned out to be worth nothing until tested.
+
+**`actionlint` reports a broken gate as clean.** Point `uses: ./.github/workflows/drivers.yml`
+at a file that does not exist and actionlint still exits 0 — verified by mutation. So a green
+lint said nothing at all about whether the deploy was actually wired to wait for anything.
+
+**Wiring first attempted on the push that deploys is wiring nobody has run.** `pages.yml` only
+triggered on push to the deploy branch, so the very first execution of the reusable-workflow
+call would have been the one shipping to the live site. It now runs on `pull_request` too with
+`deploy` alone withheld by `if: github.event_name != 'pull_request'`, and `drivers.yml` dropped
+its own trigger to become `workflow_call`-only — one definition, one run per event, and the call
+exercised on every PR.
+
+Then the gate was made to fail on purpose. The sway was disabled with a one-character mutation
+(`k` → `k * 0`), which **passes typecheck and all 332 unit tests** — exactly the class of
+regression the old pipeline deployed green. The run came back:
+
+```
+FAIL  the scene changes between frames with nothing touched — 0.00% of sampled channels moved
+build: success  ·  drivers / drive: failure  ·  deploy: SKIPPED
+```
+
+Failing **for the stated reason**, not incidentally, and blocking the deploy through the whole
+chain: driver exit 1 → step → called-workflow job → unsatisfied `needs` → no deploy. The
+failure-artifact upload fired too, so the screenshots of the broken frame were waiting in the
+run. On the real runner `check-motion` measures 60.1 fps, the same as locally, so its one
+frame-rate assertion stays where it is.

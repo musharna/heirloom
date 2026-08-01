@@ -1,0 +1,87 @@
+name: drivers
+
+# The behavioural drivers, run against a REAL production bundle in a REAL browser.
+#
+# Everything CI checked before this was typecheck, unit tests and build. All three pass on a
+# game that renders nothing, responds to no click and loses the garden on reload: the unit
+# suite tests what `growPlant` RETURNS, and every interaction and render defect this project
+# has had lived downstream of that, in what reaches the canvas. So an interaction or render
+# regression deployed green, and the only thing standing between it and the live site was
+# somebody remembering to run `npm run drive` by hand.
+#
+# `workflow_call` ONLY, with no trigger of its own. pages.yml is the single entry point and it
+# runs on pull_request as well as on push, so this fires exactly once per event either way — and,
+# more to the point, the CALL is exercised on every PR instead of being first attempted on the
+# push that deploys. Wiring that has never executed is not a gate.
+#
+# It was briefly `pull_request:` here plus a call from pages.yml, and the reason that is wrong is
+# worth keeping: actionlint reports a `uses: ./.github/workflows/...` pointing at a file that
+# DOES NOT EXIST as clean, exit 0. Verified by mutation. So nothing static was ever going to
+# tell us the gate was wired up; only running it does.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  drive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GARDEN_URL: http://localhost:4173/heirloom/garden/
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # Skip the bundled download during `npm ci` — it fetches Chromium, Firefox and WebKit,
+      # and the drivers launch Chromium only.
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      - run: npx playwright install --with-deps chromium
+
+      # The drivers run against the PRODUCTION bundle, not the dev server. That distinction is
+      # not academic: `vite preview` runs with command === "serve", so before this workflow
+      # existed the config mounted the built site at "/" while its own <script src> was baked
+      # at "/heirloom/" — every asset came back as the SPA index fallback with a 200, and the
+      # page was blank. Nothing that tests the dev server can see that class of bug.
+      - run: npm run build
+
+      - name: serve the build
+        run: |
+          npm run preview -- --host 127.0.0.1 &
+          # Poll for the real page rather than sleeping. A fixed sleep is a race that fails on
+          # a slow runner and passes on a fast one, and the failure reads as a broken game.
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null "$GARDEN_URL"; then echo "up after ${i}s"; exit 0; fi
+            sleep 1
+          done
+          echo "::error::the preview server never served $GARDEN_URL"
+          exit 1
+
+      # Behaviour only. The two PERFORMANCE drivers stay local on purpose:
+      # `tools/check-phone.mjs` asserts frame-rate floors measured as a population on one
+      # machine under CDP CPU throttling, and a shared two-core runner is already several times
+      # slower before any throttle is applied. Porting those floors here would be the fifth
+      # time in this project a threshold from one machine's sample landed inside another's
+      # legitimate range. A frame-rate number is not portable; what these six assert is.
+      - run: node tools/drive-verbs.mjs
+      - run: node tools/drive-forest.mjs
+      - run: node tools/drive-persist.mjs
+      - run: node tools/drive-notebook.mjs
+      - run: node tools/check-motion.mjs
+      - run: node tools/check-viewports.mjs
+
+      # A driver failure is a VISUAL failure most of the time, and "FAIL — coverage 0" does not
+      # say what the screen looked like. The drivers already write PNGs; keep them.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: driver-shots
+          path: shots/
+          if-no-files-found: ignore

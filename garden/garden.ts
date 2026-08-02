@@ -39,7 +39,12 @@ import {
   toSave,
   type ReplayEntry,
 } from "../src/game/save";
-import { grownLine, plotLabel, seedLabel } from "../src/game/describe";
+import {
+  carrierLabel,
+  grownLine,
+  plotLabel,
+  seedLabel,
+} from "../src/game/describe";
 import {
   CARRIER_INTERVAL_TICKS,
   canCarrierArrive,
@@ -706,8 +711,9 @@ let a11ySig = "";
 
 /** Push the garden's current state into the hidden mirror, if any of it has changed. */
 function syncA11y(): void {
+  const carrying = insects().filter((i) => i.pollen);
   const sig =
-    `${garden.tray.length}|` +
+    `${garden.tray.length}|${carrying.length}|` +
     garden.plots
       .map((p) => (!p.occupant ? "-" : isGrown(p.occupant, now) ? "g" : "w"))
       .join("");
@@ -716,6 +722,7 @@ function syncA11y(): void {
   syncMirror(
     garden.plots.map((p, i) => plotLabel(i, p.occupant, now)),
     garden.tray.map((_, i) => seedLabel(i, garden.tray.length)),
+    carrying.map((c) => carrierLabel(c.pollen!)),
   );
 }
 
@@ -807,10 +814,17 @@ function activate(t: Target): void {
   const at = { x: plotXs[t.index] ?? W / 2, y: SOIL };
 
   if (!held) {
-    // An empty plot holds nothing, so picking it up would arm a verb with no subject.
+    // An empty plot holds nothing, so picking it up would arm a verb with no subject. A carrier
+    // always holds something, so it needs no such check.
     if (t.kind === "plot" && !occ) return;
     held = t;
-    announce(t.kind === "plot" ? "picked up a flower" : "picked up a seed");
+    announce(
+      t.kind === "plot"
+        ? "picked up a flower"
+        : t.kind === "seed"
+          ? "picked up a seed"
+          : "took the pollinator's pollen",
+    );
     return;
   }
 
@@ -840,6 +854,16 @@ function activate(t: Target): void {
     if (!a || !b || a.id === b.id) return;
     doSplice(a.id, b.id, at);
     announce("spliced");
+  } else if (from.kind === "carrier" && t.kind === "plot") {
+    // Indexed against the same filtered list `syncA11y` built the labels from, so the button's
+    // index and the insect it names cannot disagree.
+    const bug = insects().filter((i) => i.pollen)[from.index];
+    if (!bug || !occ) return;
+    const pollen = parseGenome(bug.pollen!);
+    if (!pollen.ok) return;
+    doCross(pollen.genome, occ.genome, at, "wild");
+    removeInsect(bug);
+    announce("crossed in the pollen");
   } else return;
 
   afterVerb();

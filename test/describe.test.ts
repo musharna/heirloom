@@ -4,7 +4,12 @@ import { grow, type Planting } from "../src/game/garden";
 import { randomGenome } from "../src/genome/genome";
 import { serialize } from "../src/genome/serialize";
 import { shortLabel } from "../src/game/notebook";
-import { plotLabel, seedLabel, grownLine } from "../src/game/describe";
+import {
+  carrierLabel,
+  grownLine,
+  plotLabel,
+  seedLabel,
+} from "../src/game/describe";
 
 const SOIL = 400;
 const rand = mulberry32(7);
@@ -71,5 +76,16 @@ describe("grownLine", () => {
   it("says nothing about a plant that has not finished", () => {
     const p = planting();
     expect(grownLine(3, p, 0)).toBe("");
+  });
+});
+
+describe("carrierLabel", () => {
+  it("names the plant the pollen came from", () => {
+    // Named on purpose, and consistent: the drawer already renders every retired plant from its
+    // real genome, so this is not a disclosure the game withholds anywhere else.
+    const many = mulberry32(21);
+    const code = serialize(randomGenome(many));
+    expect(carrierLabel(code)).toContain(shortLabel(code));
+    expect(carrierLabel(code)).toContain("pollen");
   });
 });

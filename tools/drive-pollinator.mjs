@@ -118,6 +118,38 @@ check(
 const origins = await page.evaluate(() => window.__origins());
 check('the seed is recorded as a wild cross', origins.includes('wild'), origins.join(','));
 
+
+// ── KEYBOARD ─────────────────────────────────────────────────────────────────────────────────
+// A new interactive entity that lived only on the canvas would silently regress the keyboard and
+// screen-reader access. The carrier reaches the mirror or it is not done.
+await page.evaluate((g) => window.__spawnCarrier(g), donor);
+await page.waitForTimeout(150);
+const names = () =>
+  page.evaluate(() =>
+    [...document.querySelectorAll('#mirror button')].map((b) => b.textContent.trim()),
+  );
+let labels = await names();
+check(
+  'the carrier is in the mirror',
+  labels.some((n) => n.includes('pollen')),
+  labels.filter((n) => n.includes('pollen')).join(' | ') || labels.join(' | '),
+);
+
+const kbBefore = (await state()).tray;
+const carrierIdx = labels.findIndex((n) => n.includes('pollen'));
+const plotIdx = labels.findIndex((n) => /^plot \d+, .*finished$/.test(n));
+check('CONTROL: a grown plot exists to cross into', plotIdx >= 0, labels.join(' | '));
+await page.evaluate((i) => document.querySelectorAll('#mirror button')[i].focus(), carrierIdx);
+await page.keyboard.press('Enter');
+await page.evaluate((i) => document.querySelectorAll('#mirror button')[i].focus(), plotIdx);
+await page.keyboard.press('Enter');
+check(
+  'a carrier can be crossed in from the keyboard',
+  (await state()).tray === kbBefore + 1,
+  `tray ${kbBefore} -> ${(await state()).tray}`,
+);
+check('and it left the mirror with its pollen', !(await names()).some((n) => n.includes('pollen')));
+
 check('no page errors', errors.length === 0, errors.join(' · '));
 await browser.close();
 console.log(failures ? `${failures} FAILED` : 'all pollinator checks passed');

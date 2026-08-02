@@ -15,7 +15,7 @@ import type { Genome, PolyBlock } from "./genome";
 /** Bumped whenever the bit layout changes. An old link then fails loudly instead of decoding to nonsense. */
 export const GENOME_VERSION = 2;
 
-const PAYLOAD_BYTES = 8; // 58 used of 64: see serialize
+export const PAYLOAD_BYTES = 8; // 58 used of 64: see serialize
 const TOTAL_BYTES = 1 + PAYLOAD_BYTES + 1; // version + payload + checksum
 
 /** The v1 layout, kept only so old links and saves still open. See `readV1`. */
@@ -23,7 +23,7 @@ const V1_PAYLOAD_BYTES = 6;
 const V1_TOTAL_BYTES = 1 + V1_PAYLOAD_BYTES + 1;
 const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
-class BitWriter {
+export class BitWriter {
   readonly bytes: Uint8Array;
   private at = 0;
   constructor(n: number) {
@@ -38,7 +38,7 @@ class BitWriter {
   }
 }
 
-class BitReader {
+export class BitReader {
   private at = 0;
   constructor(private readonly bytes: Uint8Array) {}
   read(width: number): number {
@@ -51,7 +51,7 @@ class BitReader {
   }
 }
 
-function bytesToBase64Url(bytes: Uint8Array): string {
+export function bytesToBase64Url(bytes: Uint8Array): string {
   let out = "";
   for (let i = 0; i < bytes.length; i += 3) {
     const a = bytes[i]!;
@@ -68,7 +68,7 @@ function bytesToBase64Url(bytes: Uint8Array): string {
 }
 
 /** Returns null on any character outside the base64url alphabet. */
-function base64UrlToBytes(s: string): Uint8Array | null {
+export function base64UrlToBytes(s: string): Uint8Array | null {
   const n = Math.floor((s.length * 6) / 8);
   const bytes = new Uint8Array(n);
   let acc = 0;
@@ -87,7 +87,7 @@ function base64UrlToBytes(s: string): Uint8Array | null {
   return bytes;
 }
 
-function checksum(bytes: Uint8Array, upto: number): number {
+export function checksumOf(bytes: Uint8Array, upto: number): number {
   let s = "";
   for (let i = 0; i < upto; i++) s += String.fromCharCode(bytes[i]!);
   return hashString(s) & 0xff;
@@ -104,17 +104,18 @@ function readPoly(r: BitReader): PolyBlock {
 }
 
 /**
- * Genome → short base64url string.
+ * The genome bit layout — the ONE definition.
+ *
+ * `serialize` wraps this in a version byte and a checksum; the postcard codec packs many of
+ * these behind a single version and checksum of its own. Two copies of this function would
+ * decode each other's genomes into different, perfectly valid, checksum-passing flowers.
  *
  * 58 payload bits: W/H1/H2/D/L take one bit per allele copy, P/I/N take two each (four-allele
- * series), and each polygenic block takes 12. Rounded up to 8 bytes, plus a version byte and a
- * checksum byte, that is 10 bytes — 14 characters, still short enough for a URL fragment.
- *
- * The six spare bits are left as zero rather than being packed tighter. A tighter packing
- * would save one character and cost the next locus a version bump.
+ * series), and each polygenic block takes 12. I/N/L are appended AFTER the v1 fields, in the
+ * same order as DISCRETE_LOCI — keeping the old fields at their old bit offsets is what lets
+ * `parseGenome`'s v1 tail fallback be the same reader with a shorter tail.
  */
-export function serialize(g: Genome): string {
-  const w = new BitWriter(PAYLOAD_BYTES);
+export function writeGenomeBits(w: BitWriter, g: Genome): void {
   w.write(W_ALLELES.indexOf(g.W[0]), 1);
   w.write(W_ALLELES.indexOf(g.W[1]), 1);
   w.write(H1_ALLELES.indexOf(g.H1[0]), 1);
@@ -128,19 +129,46 @@ export function serialize(g: Genome): string {
   writePoly(w, g.V);
   writePoly(w, g.G);
   writePoly(w, g.B);
-  // Appended AFTER the v1 fields, in the same order as DISCRETE_LOCI. Keeping the old fields
-  // at their old bit offsets is what lets `readV1` be the same reader with a shorter tail.
   w.write(I_ALLELES.indexOf(g.I[0]), 2);
   w.write(I_ALLELES.indexOf(g.I[1]), 2);
   w.write(N_ALLELES.indexOf(g.N[0]), 2);
   w.write(N_ALLELES.indexOf(g.N[1]), 2);
   w.write(L_ALLELES.indexOf(g.L[0]), 1);
   w.write(L_ALLELES.indexOf(g.L[1]), 1);
+}
 
+/** The v2 reader. `parseGenome` still handles the v1 tail itself, which this does not know about. */
+export function readGenomeBits(r: BitReader): Genome {
+  const W = [W_ALLELES[r.read(1)]!, W_ALLELES[r.read(1)]!];
+  const H1 = [H1_ALLELES[r.read(1)]!, H1_ALLELES[r.read(1)]!];
+  const H2 = [H2_ALLELES[r.read(1)]!, H2_ALLELES[r.read(1)]!];
+  const D = [D_ALLELES[r.read(1)]!, D_ALLELES[r.read(1)]!];
+  const P = [P_ALLELES[r.read(2)]!, P_ALLELES[r.read(2)]!];
+  const V = readPoly(r);
+  const G = readPoly(r);
+  const B = readPoly(r);
+  const I = [I_ALLELES[r.read(2)]!, I_ALLELES[r.read(2)]!];
+  const N = [N_ALLELES[r.read(2)]!, N_ALLELES[r.read(2)]!];
+  const L = [L_ALLELES[r.read(1)]!, L_ALLELES[r.read(1)]!];
+  return { W, H1, H2, D, P, V, G, B, I, N, L } as Genome;
+}
+
+/**
+ * Genome → short base64url string.
+ *
+ * Rounded up to 8 payload bytes, plus a version byte and a checksum byte, that is 10 bytes —
+ * 14 characters, still short enough for a URL fragment.
+ *
+ * The six spare bits are left as zero rather than being packed tighter. A tighter packing
+ * would save one character and cost the next locus a version bump.
+ */
+export function serialize(g: Genome): string {
+  const w = new BitWriter(PAYLOAD_BYTES);
+  writeGenomeBits(w, g);
   const out = new Uint8Array(TOTAL_BYTES);
   out[0] = GENOME_VERSION;
   out.set(w.bytes, 1);
-  out[TOTAL_BYTES - 1] = checksum(out, TOTAL_BYTES - 1);
+  out[TOTAL_BYTES - 1] = checksumOf(out, TOTAL_BYTES - 1);
   return bytesToBase64Url(out);
 }
 
@@ -183,9 +211,12 @@ export function parseGenome(s: string): ParseResult {
       ok: false,
       error: `wrong length: expected ${total} bytes for version ${version}, got ${bytes.length}`,
     };
-  if (bytes[total - 1] !== checksum(bytes, total - 1))
+  if (bytes[total - 1] !== checksumOf(bytes, total - 1))
     return { ok: false, error: "checksum mismatch — the genome is corrupted" };
 
+  // Inlined rather than calling readGenomeBits: a v1 link has a shorter tail (see below), which
+  // readGenomeBits deliberately does not model. Do not "simplify" this to call readGenomeBits —
+  // that would drop the v1 fallback and break every v1 link still in the wild.
   const r = new BitReader(bytes.subarray(1, total - 1));
   const common = {
     W: [W_ALLELES[r.read(1)]!, W_ALLELES[r.read(1)]!],

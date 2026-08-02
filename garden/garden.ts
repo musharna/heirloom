@@ -10,6 +10,7 @@ import {
   spliceSeeds,
   TRAY_CAP,
   type Garden,
+  type Origin,
   type Planting,
 } from "../src/game/garden";
 import {
@@ -575,6 +576,7 @@ takeSharedGenome();
 type Drag =
   | { kind: "bloom"; plotIndex: number; genome: Genome; from: Vec2 }
   | { kind: "seed"; id: number; from: Vec2 }
+  | { kind: "pollen"; bug: Insect; from: Vec2 }
   | null;
 
 let drag: Drag = null;
@@ -645,6 +647,15 @@ canvas.addEventListener("pointerdown", (e) => {
     learn("read");
     renderCard();
   }, PRESS_MS);
+
+  // BEFORE the bloom test. A carrier sits ON a flower, so testing blooms first would always
+  // pick the flower underneath it and the carrier would be impossible to pick up — a failure
+  // that presents as "dragging the insect clones the plant".
+  const carrier = insectAt(p);
+  if (carrier) {
+    drag = { kind: "pollen", bug: carrier, from: p };
+    return;
+  }
 
   const seed = seedAt(garden, p, W, H);
   if (seed !== null) {
@@ -721,10 +732,15 @@ function syncA11y(): void {
  * verb DOES. `at` is only where the confirmation ring is drawn, so the keyboard can pass a plot's
  * own position and get the same feedback without a pointer.
  */
-function doCross(a: Genome, b: Genome, at: Vec2): void {
+function doCross(
+  a: Genome,
+  b: Genome,
+  at: Vec2,
+  origin: Origin = "cross",
+): void {
   garden = addSeed(garden, crossOf(a, b, rand), {
     parents: [serialize(a), serialize(b)],
-    origin: "cross",
+    origin,
   });
   learn("cross");
   flash = { at, until: now + FLASH_TICKS };
@@ -933,6 +949,22 @@ function release(e: PointerEvent): void {
   }
   const travelled = Math.hypot(p.x - d.from.x, p.y - d.from.y);
 
+  if (d.kind === "pollen") {
+    // WILD — pollen from a plant the player retired, crossed into a flower they chose.
+    //
+    // No partner, no cross, and the carrier stays put: a fumbled drag should cost nothing,
+    // because the carrier is on a timer the player did not set.
+    const onto = bloomAt(garden, p, now, 1.15, localToPlot);
+    if (!onto) return;
+    const partner = garden.plots[onto.plotIndex]!.occupant!.genome;
+    const pollen = parseGenome(d.bug.pollen!);
+    if (!pollen.ok) return;
+    doCross(pollen.genome, partner, p, "wild");
+    removeInsect(d.bug);
+    afterVerb();
+    return;
+  }
+
   if (d.kind === "bloom") {
     const onto = bloomAt(garden, p, now, 1.15, localToPlot);
     if (onto && onto.plotIndex !== d.plotIndex) {
@@ -1023,6 +1055,20 @@ function paintHalo(at: Vec2, r: number, alpha: number, rgb = RING_PLANT): void {
  *
  * Blooms are tested first by the caller, so this only ever sees clicks on stems and foliage.
  */
+/**
+ * The pollen carrier under a point, or null.
+ *
+ * Ambient insects are skipped — they carry nothing, so there is nothing to pick up, and making
+ * them draggable would offer the player a gesture that silently does nothing.
+ */
+function insectAt(p: Vec2): Insect | null {
+  for (const i of insects()) {
+    if (!i.pollen) continue;
+    if (Math.hypot(p.x - i.x, p.y - i.y) <= 12) return i;
+  }
+  return null;
+}
+
 /** How many flowers are open anywhere in the bed — a carrier needs somewhere to land. */
 function bloomCount(): number {
   return garden.plots.reduce(
@@ -1686,7 +1732,12 @@ function frame(): void {
         );
     } else {
       const onto = bloomAt(garden, pointer, now, 1.15, localToPlot);
-      if (onto && onto.plotIndex !== drag.plotIndex)
+      // A pollen carrier has no source plot, and crossing it into the flower it was sitting on
+      // is perfectly legal — so unlike a bloom drag, every bloom under the pointer is a valid
+      // target and gets the ring.
+      const sameSource =
+        drag.kind === "bloom" && onto?.plotIndex === drag.plotIndex;
+      if (onto && !sameSource)
         paintHalo(onto.bloom.center, onto.bloom.radius * 1.3, 0.85);
     }
   }
@@ -1909,6 +1960,8 @@ Object.assign(window as unknown as Record<string, unknown>, {
   }),
   /** What the keyboard is holding, so a driver can assert a pickup without reaching inside. */
   __held: () => held,
+  /** Tray seed origins, so a driver can assert provenance without decoding a save. */
+  __origins: () => garden.tray.map((s) => s.origin ?? "none"),
   /** Live insects, so a driver can see one without waiting for a rare random arrival. */
   __insects: () =>
     insects().map((i) => ({

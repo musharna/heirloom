@@ -22,6 +22,17 @@ await page.evaluate(() => localStorage.clear());
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForFunction(() => window.__ready === true, { timeout: 15000 });
 
+// Canvas space is NOT page space. The canvas is drawn at `__size()` and laid out at whatever
+// CSS size the viewport gives it, so every coordinate from `__blooms()` or `__insects()` has to
+// be mapped before a mouse can be aimed at it. Skipping this does not throw — it just clicks
+// somewhere else, and a negative control then passes for entirely the wrong reason.
+const box = await page.locator('#c').boundingBox();
+const size = await page.evaluate(() => window.__size());
+const toPage = (p) => ({
+  x: box.x + (p.x * box.width) / size.w,
+  y: box.y + (p.y * box.height) / size.h,
+});
+
 let failures = 0;
 function check(label, ok, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? ` — ${detail}` : ''}`);
@@ -63,6 +74,49 @@ check(
   Number.isInteger(live[0]?.plotIndex) && live[0].plotIndex >= 0,
   `plotIndex ${live[0]?.plotIndex}`,
 );
+
+// ── CROSSING IT IN ───────────────────────────────────────────────────────────────────────────
+const blooms = () => page.evaluate(() => window.__blooms());
+
+// NEGATIVE CONTROL: a carrier dragged onto bare sky must yield nothing.
+const trayBefore = (await state()).tray;
+let bug = (await carriers())[0];
+let grip = toPage(bug);
+await page.mouse.move(grip.x, grip.y);
+await page.mouse.down();
+await page.mouse.move(box.x + 30, box.y + 20, { steps: 8 });
+await page.mouse.up();
+check(
+  'CONTROL: a carrier dropped on sky yields no seed',
+  (await state()).tray === trayBefore,
+  `tray ${trayBefore} -> ${(await state()).tray}`,
+);
+// A separate failure from the one above, deliberately. If the hit test picks the flower
+// UNDERNEATH the carrier instead of the carrier, the drag becomes a clone and the carrier stays
+// — so a missing carrier here points at hit-test ordering, not at the cross.
+check('CONTROL: and the carrier survived the failed drag', (await carriers()).length === 1);
+
+// Dragged onto a flower, it crosses.
+bug = (await carriers())[0];
+const all = await blooms();
+const target = toPage(all.find((b) => b.plotIndex !== bug.plotIndex) ?? all[0]);
+grip = toPage(bug);
+await page.mouse.move(grip.x, grip.y);
+await page.mouse.down();
+await page.mouse.move(target.x, target.y, { steps: 10 });
+await page.mouse.up();
+check(
+  'dragging a carrier onto a flower makes a seed',
+  (await state()).tray === trayBefore + 1,
+  `tray ${trayBefore} -> ${(await state()).tray}`,
+);
+check(
+  'and the carrier is gone once its pollen has been taken',
+  (await carriers()).length === 0,
+);
+
+const origins = await page.evaluate(() => window.__origins());
+check('the seed is recorded as a wild cross', origins.includes('wild'), origins.join(','));
 
 check('no page errors', errors.length === 0, errors.join(' · '));
 await browser.close();

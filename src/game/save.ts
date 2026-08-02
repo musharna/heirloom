@@ -1,6 +1,7 @@
 import { parseGenome, serialize } from "../genome/serialize";
 import type { Genome } from "../genome/genome";
 import {
+  ORIGINS,
   TRAY_CAP,
   createGarden,
   grow,
@@ -171,10 +172,11 @@ function readStored(
       : undefined;
   const id = typeof v["id"] === "number" ? v["id"] : undefined;
   const o = v["o"];
-  const origin =
-    o === "clone" || o === "self" || o === "cross" || o === "founder"
-      ? (o as Origin)
-      : undefined;
+  // Membership against the one definition, not a restatement of it. This used to be a hand
+  // written disjunction of four strings, and it silently dropped `archive` for as long as the
+  // drawer has existed — the writer above serialises every origin, so the value was written to
+  // disk and then refused on the way back in.
+  const origin = ORIGINS.includes(o as Origin) ? (o as Origin) : undefined;
   return {
     ok: true,
     value: {

@@ -37,6 +37,19 @@ export function seedLabel(index: number, total: number): string {
 }
 
 /**
+ * What a pollen carrier reads as in the mirror.
+ *
+ * Names its source, unlike `seedLabel`, and the difference is not an inconsistency. A tray seed
+ * is anonymous because the game never shows what a seed is — they are drawn identically and the
+ * HUD carries only an opaque share code. A retired plant is the opposite: the drawer already
+ * renders every one of them from its real genome, so withholding the name here would hide
+ * something the game hands over one tab away.
+ */
+export function carrierLabel(pollenCode: string): string {
+  return `a pollinator carrying pollen from a ${shortLabel(pollenCode)}`;
+}
+
+/**
  * What the live region says when a plant finishes growing.
  *
  * Returns the empty string rather than a description when the plant has not finished, so a

@@ -10,6 +10,7 @@ import {
   spliceSeeds,
   TRAY_CAP,
   type Garden,
+  type Origin,
   type Planting,
 } from "../src/game/garden";
 import {
@@ -38,7 +39,28 @@ import {
   toSave,
   type ReplayEntry,
 } from "../src/game/save";
-import { grownLine, plotLabel, seedLabel } from "../src/game/describe";
+import {
+  carrierLabel,
+  grownLine,
+  plotLabel,
+  seedLabel,
+} from "../src/game/describe";
+import {
+  CARRIER_INTERVAL_TICKS,
+  canCarrierArrive,
+  didPollinate,
+  pickPollen,
+} from "../src/game/pollinator";
+import {
+  drawInsects,
+  insects,
+  removeInsect,
+  spawnAmbient,
+  spawnCarrier,
+  takeExpired,
+  updateInsects,
+  type Insect,
+} from "./insects";
 import {
   announce,
   focusedTarget,
@@ -560,6 +582,7 @@ takeSharedGenome();
 type Drag =
   | { kind: "bloom"; plotIndex: number; genome: Genome; from: Vec2 }
   | { kind: "seed"; id: number; from: Vec2 }
+  | { kind: "pollen"; bug: Insect; from: Vec2 }
   | null;
 
 let drag: Drag = null;
@@ -631,6 +654,15 @@ canvas.addEventListener("pointerdown", (e) => {
     renderCard();
   }, PRESS_MS);
 
+  // BEFORE the bloom test. A carrier sits ON a flower, so testing blooms first would always
+  // pick the flower underneath it and the carrier would be impossible to pick up — a failure
+  // that presents as "dragging the insect clones the plant".
+  const carrier = insectAt(p);
+  if (carrier) {
+    drag = { kind: "pollen", bug: carrier, from: p };
+    return;
+  }
+
   const seed = seedAt(garden, p, W, H);
   if (seed !== null) {
     drag = { kind: "seed", id: seed, from: p };
@@ -680,8 +712,9 @@ let a11ySig = "";
 
 /** Push the garden's current state into the hidden mirror, if any of it has changed. */
 function syncA11y(): void {
+  const carrying = insects().filter((i) => i.pollen);
   const sig =
-    `${garden.tray.length}|` +
+    `${garden.tray.length}|${carrying.length}|` +
     garden.plots
       .map((p) => (!p.occupant ? "-" : isGrown(p.occupant, now) ? "g" : "w"))
       .join("");
@@ -690,6 +723,7 @@ function syncA11y(): void {
   syncMirror(
     garden.plots.map((p, i) => plotLabel(i, p.occupant, now)),
     garden.tray.map((_, i) => seedLabel(i, garden.tray.length)),
+    carrying.map((c) => carrierLabel(c.pollen!)),
   );
 }
 
@@ -706,10 +740,15 @@ function syncA11y(): void {
  * verb DOES. `at` is only where the confirmation ring is drawn, so the keyboard can pass a plot's
  * own position and get the same feedback without a pointer.
  */
-function doCross(a: Genome, b: Genome, at: Vec2): void {
+function doCross(
+  a: Genome,
+  b: Genome,
+  at: Vec2,
+  origin: Origin = "cross",
+): void {
   garden = addSeed(garden, crossOf(a, b, rand), {
     parents: [serialize(a), serialize(b)],
-    origin: "cross",
+    origin,
   });
   learn("cross");
   flash = { at, until: now + FLASH_TICKS };
@@ -776,10 +815,17 @@ function activate(t: Target): void {
   const at = { x: plotXs[t.index] ?? W / 2, y: SOIL };
 
   if (!held) {
-    // An empty plot holds nothing, so picking it up would arm a verb with no subject.
+    // An empty plot holds nothing, so picking it up would arm a verb with no subject. A carrier
+    // always holds something, so it needs no such check.
     if (t.kind === "plot" && !occ) return;
     held = t;
-    announce(t.kind === "plot" ? "picked up a flower" : "picked up a seed");
+    announce(
+      t.kind === "plot"
+        ? "picked up a flower"
+        : t.kind === "seed"
+          ? "picked up a seed"
+          : "took the pollinator's pollen",
+    );
     return;
   }
 
@@ -809,8 +855,40 @@ function activate(t: Target): void {
     if (!a || !b || a.id === b.id) return;
     doSplice(a.id, b.id, at);
     announce("spliced");
+  } else if (from.kind === "carrier" && t.kind === "plot") {
+    // Indexed against the same filtered list `syncA11y` built the labels from, so the button's
+    // index and the insect it names cannot disagree.
+    const bug = insects().filter((i) => i.pollen)[from.index];
+    if (!bug || !occ) return;
+    const pollen = parseGenome(bug.pollen!);
+    if (!pollen.ok) return;
+    doCross(pollen.genome, occ.genome, at, "wild");
+    removeInsect(bug);
+    announce("crossed in the pollen");
   } else return;
 
+  afterVerb();
+}
+
+/**
+ * A carrier has left. Did it pollinate on the way out?
+ *
+ * The parent is the flower it was ACTUALLY SITTING ON, never a random one. The player watched it
+ * settle there, so the surprise stays honest rather than arbitrary — and a seed whose parentage
+ * the player could not have predicted from what they saw would be evidence they cannot reason
+ * about.
+ *
+ * If that plant has since been replaced the cross is abandoned. Evidence about a plant that is
+ * no longer inspectable is evidence the player cannot act on.
+ */
+function resolveDeparture(bug: Insect, pollinated: boolean): void {
+  if (!pollinated || !bug.pollen) return;
+  const occ = garden.plots[bug.plotIndex]?.occupant;
+  if (!occ) return;
+  const pollen = parseGenome(bug.pollen);
+  if (!pollen.ok) return;
+  doCross(pollen.genome, occ.genome, { x: bug.x, y: bug.y }, "wild");
+  announce("a pollinator pollinated a flower before it left");
   afterVerb();
 }
 
@@ -918,6 +996,22 @@ function release(e: PointerEvent): void {
   }
   const travelled = Math.hypot(p.x - d.from.x, p.y - d.from.y);
 
+  if (d.kind === "pollen") {
+    // WILD — pollen from a plant the player retired, crossed into a flower they chose.
+    //
+    // No partner, no cross, and the carrier stays put: a fumbled drag should cost nothing,
+    // because the carrier is on a timer the player did not set.
+    const onto = bloomAt(garden, p, now, 1.15, localToPlot);
+    if (!onto) return;
+    const partner = garden.plots[onto.plotIndex]!.occupant!.genome;
+    const pollen = parseGenome(d.bug.pollen!);
+    if (!pollen.ok) return;
+    doCross(pollen.genome, partner, p, "wild");
+    removeInsect(d.bug);
+    afterVerb();
+    return;
+  }
+
   if (d.kind === "bloom") {
     const onto = bloomAt(garden, p, now, 1.15, localToPlot);
     if (onto && onto.plotIndex !== d.plotIndex) {
@@ -1008,6 +1102,52 @@ function paintHalo(at: Vec2, r: number, alpha: number, rgb = RING_PLANT): void {
  *
  * Blooms are tested first by the caller, so this only ever sees clicks on stems and foliage.
  */
+/**
+ * The pollen carrier under a point, or null.
+ *
+ * Ambient insects are skipped — they carry nothing, so there is nothing to pick up, and making
+ * them draggable would offer the player a gesture that silently does nothing.
+ */
+function insectAt(p: Vec2): Insect | null {
+  for (const i of insects()) {
+    if (!i.pollen) continue;
+    if (Math.hypot(p.x - i.x, p.y - i.y) <= 12) return i;
+  }
+  return null;
+}
+
+/** How many flowers are open anywhere in the bed — a carrier needs somewhere to land. */
+function bloomCount(): number {
+  return garden.plots.reduce(
+    (n, p) => n + (p.occupant ? bloomsOf(p.occupant, now).length : 0),
+    0,
+  );
+}
+
+/**
+ * A drawn bloom for a carrier to settle on, in CANVAS space, or null when nothing is open.
+ *
+ * Canvas space and not plant space, deliberately: plants are painted through a depth transform,
+ * so a bloom's position in its own plant's coordinates is not where it appears. An insect placed
+ * at the untransformed point would sit visibly away from the flower it is supposed to be on —
+ * the same trap `__blooms` documents for drivers aiming a pointer.
+ */
+function anyOpenBloom(): { plotIndex: number; x: number; y: number } | null {
+  const all = garden.plots.flatMap((plot, plotIndex) => {
+    const occ = plot.occupant;
+    if (!occ) return [];
+    const base = occ.plant.segments[0];
+    const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
+    const d = bedDepth(plotIndex);
+    return bloomsOf(occ, now).map((b) => {
+      const at = toCanvasSpace(b.center, anchor, d);
+      return { plotIndex, x: at.x, y: at.y };
+    });
+  });
+  if (!all.length) return null;
+  return all[Math.floor(rand() * all.length)] ?? null;
+}
+
 function plantAt(p: Vec2): number | null {
   let best: number | null = null;
   let bestD = Infinity;
@@ -1498,6 +1638,25 @@ function frame(): void {
 
   recordGrownPlants();
   announceGrown();
+  updateInsects(now, W);
+  for (const gone of takeExpired()) resolveDeparture(gone, didPollinate(rand));
+  // Ambient insects are cheap and unconditional. Carriers are rare and gated: `SPEED` ticks pass
+  // per frame, so dividing by the interval gives roughly one arrival per CARRIER_INTERVAL_TICKS
+  // ticks — about ninety seconds — and only when there is both somewhere to land and something
+  // to carry.
+  if (rand() < 0.003) spawnAmbient(W, H, rand);
+  if (
+    rand() < SPEED / CARRIER_INTERVAL_TICKS &&
+    canCarrierArrive(retirementLog, bloomCount())
+  ) {
+    const pollen = pickPollen(retirementLog, rand);
+    const spot = anyOpenBloom();
+    if (pollen && spot) {
+      spawnCarrier(pollen, spot.plotIndex, spot, now);
+      // An arrival changes what the player can do, so it is a milestone rather than ambience.
+      announce(carrierLabel(pollen));
+    }
+  }
   syncA11y();
 
   drawStage();
@@ -1583,6 +1742,10 @@ function frame(): void {
     }
   }
 
+  // After the bed, so an insect reads as being in front of the flower it has settled on rather
+  // than buried behind the canopy.
+  drawInsects(ctx, now);
+
   // Affordance: ring whatever the pointer could act on right now.
   const hover = drag ? null : bloomAt(garden, pointer, now, 1.15, localToPlot);
   if (hover) paintHalo(hover.bloom.center, hover.bloom.radius * 1.25, 0.5);
@@ -1621,7 +1784,12 @@ function frame(): void {
         );
     } else {
       const onto = bloomAt(garden, pointer, now, 1.15, localToPlot);
-      if (onto && onto.plotIndex !== drag.plotIndex)
+      // A pollen carrier has no source plot, and crossing it into the flower it was sitting on
+      // is perfectly legal — so unlike a bloom drag, every bloom under the pointer is a valid
+      // target and gets the ring.
+      const sameSource =
+        drag.kind === "bloom" && onto?.plotIndex === drag.plotIndex;
+      if (onto && !sameSource)
         paintHalo(onto.bloom.center, onto.bloom.radius * 1.3, 0.85);
     }
   }
@@ -1844,6 +2012,43 @@ Object.assign(window as unknown as Record<string, unknown>, {
   }),
   /** What the keyboard is holding, so a driver can assert a pickup without reaching inside. */
   __held: () => held,
+  /** Tray seed origins, so a driver can assert provenance without decoding a save. */
+  __origins: () => garden.tray.map((s) => s.origin ?? "none"),
+  /** Live insects, so a driver can see one without waiting for a rare random arrival. */
+  __insects: () =>
+    insects().map((i) => ({
+      x: i.x,
+      y: i.y,
+      pollen: i.pollen,
+      plotIndex: i.plotIndex,
+    })),
+  /**
+   * Force a carrier onto a real open bloom. Returns false when nothing is in bloom.
+   *
+   * The alternative is a driver that waits for a once-every-ninety-seconds event, which is a
+   * flaky test by construction. The arrival RULE is unit-tested; this hook exists so the driver
+   * can test everything downstream of it.
+   */
+  __spawnCarrier: (pollen: string) => {
+    const spot = anyOpenBloom();
+    if (!spot) return false;
+    spawnCarrier(pollen, spot.plotIndex, spot, now);
+    announce(carrierLabel(pollen));
+    return true;
+  },
+  /**
+   * Expire every carrier now, with the pollination roll FORCED.
+   *
+   * Removes the driver's dependence on a one-in-seven event. The probability itself is measured
+   * over twenty thousand draws in test/pollinator.test.ts, where it costs a millisecond instead
+   * of a browser and a wait that would sometimes be wrong.
+   */
+  __expireCarriers: (pollinated: boolean) => {
+    for (const bug of insects().filter((i) => i.pollen)) {
+      removeInsect(bug);
+      resolveDeparture(bug, pollinated);
+    }
+  },
   __traySlot: (i: number) => traySlot(i, W, H),
   __plotCount: () => plotXs.length,
   __plotX: (i: number) => plotXs[i],

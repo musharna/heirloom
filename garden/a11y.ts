@@ -12,7 +12,8 @@
  */
 export type Target =
   | { kind: "plot"; index: number }
-  | { kind: "seed"; index: number };
+  | { kind: "seed"; index: number }
+  | { kind: "carrier"; index: number };
 
 const mirror = document.getElementById("mirror")!;
 const say = document.getElementById("say")!;
@@ -20,7 +21,10 @@ const say = document.getElementById("say")!;
 const targetOf = (el: HTMLElement): Target | null => {
   const kind = el.dataset["kind"];
   const index = Number(el.dataset["index"]);
-  if ((kind !== "plot" && kind !== "seed") || !Number.isInteger(index))
+  if (
+    (kind !== "plot" && kind !== "seed" && kind !== "carrier") ||
+    !Number.isInteger(index)
+  )
     return null;
   return { kind, index };
 };
@@ -60,8 +64,12 @@ export function focusedTarget(): Target | null {
  * list wholesale on every sync would throw focus back to the body every time a plant grew, which
  * reads as the page fighting the player.
  */
-export function syncMirror(plotLabels: string[], seedLabels: string[]): void {
-  const all = [...plotLabels, ...seedLabels];
+export function syncMirror(
+  plotLabels: string[],
+  seedLabels: string[],
+  carrierLabels: string[] = [],
+): void {
+  const all = [...plotLabels, ...seedLabels, ...carrierLabels];
   if (mirror.children.length !== all.length) {
     mirror.replaceChildren(
       ...all.map(() => {
@@ -73,10 +81,24 @@ export function syncMirror(plotLabels: string[], seedLabels: string[]): void {
       }),
     );
   }
+  // Three contiguous runs, so a button's KIND is its position and its INDEX is its offset within
+  // its own run. Carriers come last on purpose: they arrive and leave on their own, and putting
+  // them anywhere earlier would shuffle the tab order of the bed underneath the player.
   [...mirror.querySelectorAll("button")].forEach((b, i) => {
-    const isPlot = i < plotLabels.length;
-    b.dataset["kind"] = isPlot ? "plot" : "seed";
-    b.dataset["index"] = String(isPlot ? i : i - plotLabels.length);
+    const kind =
+      i < plotLabels.length
+        ? "plot"
+        : i < plotLabels.length + seedLabels.length
+          ? "seed"
+          : "carrier";
+    const offset =
+      kind === "plot"
+        ? i
+        : kind === "seed"
+          ? i - plotLabels.length
+          : i - plotLabels.length - seedLabels.length;
+    b.dataset["kind"] = kind;
+    b.dataset["index"] = String(offset);
     const text = all[i] ?? "";
     if (b.textContent !== text) b.textContent = text;
   });

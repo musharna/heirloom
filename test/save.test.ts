@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mulberry32 } from "../src/rng";
 import { REPLAY_CAP, SAVE_VERSION, fromSave, toSave } from "../src/game/save";
 import {
+  ORIGINS,
   TRAY_CAP,
   addSeed,
   createGarden,
@@ -274,5 +275,23 @@ describe("the notebook survives a reload", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.notebook.crosses).toHaveLength(1);
+  });
+});
+
+describe("origin round-trip", () => {
+  // Table-driven over ORIGINS ITSELF, not over a hand-written list. The whole defect here is
+  // that the legal origins were written down twice and drifted; a test that restated them would
+  // be a third copy, and would pass while the loader silently dropped a value.
+  it.each(ORIGINS)("survives a save and load: %s", (origin) => {
+    const rand = mulberry32(3);
+    let g = createGarden(XS);
+    g = addSeed(g, randomGenome(rand), {
+      parents: ["mum-code", "dad-code"],
+      origin,
+    });
+    const r = fromSave(toSave(g, 200, []), XS, SOIL);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.garden.tray.at(-1)!.origin).toBe(origin);
   });
 });

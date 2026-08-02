@@ -656,6 +656,57 @@ canvas.addEventListener("pointerup", (e) => {
   scheduleSave();
 });
 
+/**
+ * The five verbs, each one applied.
+ *
+ * Split out of `release()` because the keyboard has to fire the same verbs, and the version of
+ * this that lived inside the pointer handler could only be reached by inferring a verb from
+ * geometry. Two input paths separately deciding "which genome crosses with which" is a second
+ * hand-maintained copy of one truth — the mechanism that has already cost this project the
+ * enumerated CI driver list, the drive-persist coverage floor, and a README test count.
+ *
+ * `release()` keeps the geometry that decides WHICH verb a gesture meant. These decide what each
+ * verb DOES. `at` is only where the confirmation ring is drawn, so the keyboard can pass a plot's
+ * own position and get the same feedback without a pointer.
+ */
+function doCross(a: Genome, b: Genome, at: Vec2): void {
+  garden = addSeed(garden, crossOf(a, b, rand), {
+    parents: [serialize(a), serialize(b)],
+    origin: "cross",
+  });
+  learn("cross");
+  flash = { at, until: now + FLASH_TICKS };
+}
+
+function doSelf(g: Genome, at: Vec2): void {
+  garden = addSeed(garden, crossOf(g, g, rand), {
+    parents: [serialize(g), serialize(g)],
+    origin: "self",
+  });
+  learn("self");
+  flash = { at, until: now + FLASH_TICKS };
+}
+
+function doClone(g: Genome, at: Vec2): void {
+  garden = addSeed(garden, cloneOf(g, rand), {
+    parents: [serialize(g), serialize(g)],
+    origin: "clone",
+  });
+  learn("clone");
+  flash = { at, until: now + FLASH_TICKS };
+}
+
+function doSplice(aId: number, bId: number, at: Vec2): void {
+  garden = spliceSeeds(garden, aId, bId, rand);
+  flash = { at, until: now + FLASH_TICKS };
+}
+
+function doPlant(seedId: number, plotIndex: number): void {
+  garden = plantSeed(garden, seedId, plotIndex, SOIL, now);
+  learn("plant");
+  flash = { at: { x: plotXs[plotIndex]!, y: SOIL }, until: now + FLASH_TICKS };
+}
+
 function release(e: PointerEvent): void {
   const p = toCanvas(e);
   const d = drag;
@@ -686,13 +737,7 @@ function release(e: PointerEvent): void {
     const onto = bloomAt(garden, p, now, 1.15, localToPlot);
     if (onto && onto.plotIndex !== d.plotIndex) {
       // CROSS — two different plants.
-      const partner = garden.plots[onto.plotIndex]!.occupant!.genome;
-      garden = addSeed(garden, crossOf(d.genome, partner, rand), {
-        parents: [serialize(d.genome), serialize(partner)],
-        origin: "cross",
-      });
-      learn("cross");
-      flash = { at: p, until: now + FLASH_TICKS };
+      doCross(d.genome, garden.plots[onto.plotIndex]!.occupant!.genome, p);
     } else if (onto && travelled >= CLICK_SLOP) {
       // SELF — a drag from one flower to ANOTHER FLOWER ON THE SAME PLANT.
       //
@@ -705,21 +750,11 @@ function release(e: PointerEvent): void {
       //
       // Distinguished from CLONE by travel alone, which is why the clone branch has to test
       // distance rather than simply catching everything that is not a cross.
-      garden = addSeed(garden, crossOf(d.genome, d.genome, rand), {
-        parents: [serialize(d.genome), serialize(d.genome)],
-        origin: "self",
-      });
-      learn("self");
-      flash = { at: p, until: now + FLASH_TICKS };
+      doSelf(d.genome, p);
     } else if (travelled < CLICK_SLOP) {
       // CLONE — a click that never became a drag. A clone is genetically its parent, so it
       // can never reveal a carrier; that is exactly why selfing had to exist.
-      garden = addSeed(garden, cloneOf(d.genome, rand), {
-        parents: [serialize(d.genome), serialize(d.genome)],
-        origin: "clone",
-      });
-      learn("clone");
-      flash = { at: p, until: now + FLASH_TICKS };
+      doClone(d.genome, p);
     }
     return;
   }
@@ -727,18 +762,13 @@ function release(e: PointerEvent): void {
   // A seed was dragged. Onto another seed it splices; onto the bed it plants.
   const onto = seedAt(garden, p, W, H);
   if (onto !== null && onto !== d.id) {
-    garden = spliceSeeds(garden, d.id, onto, rand);
-    flash = { at: p, until: now + FLASH_TICKS };
+    doSplice(d.id, onto, p);
     return;
   }
   const plot = plotAt(garden, p);
   // Only a drop above the tray line plants: dragging a seed sideways along the tray is
   // rearranging, not planting, and every x in the bed is within some plot's reach.
-  if (plot !== null && p.y < SOIL + 24) {
-    garden = plantSeed(garden, d.id, plot, SOIL, now);
-    learn("plant");
-    flash = { at: { x: plotXs[plot]!, y: SOIL }, until: now + FLASH_TICKS };
-  }
+  if (plot !== null && p.y < SOIL + 24) doPlant(d.id, plot);
 }
 
 canvas.addEventListener("pointerleave", () => {

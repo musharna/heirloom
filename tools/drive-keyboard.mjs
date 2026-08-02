@@ -90,6 +90,83 @@ check(
   `reached ${[...reached].sort((a, b) => a - b).join(',')}`,
 );
 
+// ── VERBS ────────────────────────────────────────────────────────────────────────────────────
+// Let the bed finish growing first: a verb on a seedling is a different question, and mixing it
+// in here would make a failure ambiguous between "the key did nothing" and "the plant was not
+// ready".
+await page.evaluate(() => window.__seek(100000));
+await page.waitForTimeout(120);
+
+const focusButton = (i) =>
+  page.evaluate((n) => {
+    document.querySelectorAll('#mirror button')[n].focus();
+  }, i);
+const held = () => page.evaluate(() => window.__held());
+
+// NEGATIVE CONTROL: Enter on an empty plot, holding nothing, must do nothing at all.
+const s0 = await state();
+await focusButton(s0.empty);
+await page.keyboard.press('Enter');
+check(
+  'CONTROL: Enter on an empty plot holding nothing makes no seed',
+  (await state()).tray === s0.tray,
+  `tray ${s0.tray} -> ${(await state()).tray}`,
+);
+check('CONTROL: and picks nothing up', (await held()) === null);
+
+// NEGATIVE CONTROL: Escape must abandon a pickup without making anything.
+const occupied = s0.occupied;
+await focusButton(occupied[0]);
+await page.keyboard.press('Enter');
+check('Enter on a plant picks it up', (await held()) !== null);
+await page.keyboard.press('Escape');
+check('CONTROL: Escape drops what was held', (await held()) === null);
+check('CONTROL: a cancelled pickup makes no seed', (await state()).tray === s0.tray);
+
+// CROSS — two different plants.
+await focusButton(occupied[0]);
+await page.keyboard.press('Enter');
+await focusButton(occupied[1]);
+await page.keyboard.press('Enter');
+check(
+  'Enter, Enter across two plants crosses them',
+  (await state()).tray === s0.tray + 1,
+  `tray ${(await state()).tray}`,
+);
+
+// SELF — the same plant twice.
+const beforeSelf = (await state()).tray;
+await focusButton(occupied[0]);
+await page.keyboard.press('Enter');
+await page.keyboard.press('Enter');
+check('Enter twice on one plant selfs it', (await state()).tray === beforeSelf + 1);
+
+// CLONE.
+const beforeClone = (await state()).tray;
+await focusButton(occupied[0]);
+await page.keyboard.press('c');
+check('C clones the focused plant', (await state()).tray === beforeClone + 1);
+
+// PLANT — a held seed onto an empty plot. Seed buttons follow the nine plots.
+const beforePlant = await state();
+await focusButton(9);
+await page.keyboard.press('Enter');
+check('a seed can be picked up', (await held()) !== null);
+await focusButton(beforePlant.empty);
+await page.keyboard.press('Enter');
+check(
+  'a held seed plants into an empty plot',
+  (await state()).planted === beforePlant.planted + 1,
+  `planted ${beforePlant.planted} -> ${(await state()).planted}`,
+);
+
+// READ.
+await focusButton(occupied[0]);
+await page.keyboard.press('r');
+check('R opens the card', (await page.getAttribute('#card', 'hidden')) === null);
+await page.keyboard.press('Escape');
+check('Escape closes the card', (await page.getAttribute('#card', 'hidden')) !== null);
+
 check('no page errors', errors.length === 0, errors.join(' · '));
 await browser.close();
 console.log(failures ? `${failures} FAILED` : 'all keyboard checks passed');

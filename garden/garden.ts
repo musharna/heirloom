@@ -37,7 +37,13 @@ import {
   type ReplayEntry,
 } from "../src/game/save";
 import { plotLabel, seedLabel } from "../src/game/describe";
-import { syncMirror } from "./a11y";
+import {
+  announce,
+  focusedTarget,
+  mountMirror,
+  syncMirror,
+  type Target,
+} from "./a11y";
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
@@ -734,6 +740,111 @@ function doPlant(seedId: number, plotIndex: number): void {
   learn("plant");
   flash = { at: { x: plotXs[plotIndex]!, y: SOIL }, until: now + FLASH_TICKS };
 }
+
+/**
+ * What the keyboard is holding — the keyboard's analogue of `drag`.
+ *
+ * Deliberately NOT shared with `drag`. `drag` carries a canvas origin point, used to tell a
+ * click from a drag and so to tell CLONE from SELF. A key has no travel, so folding the two
+ * together would mean inventing an origin nobody measured and then reading a distance from it.
+ */
+let held: Target | null = null;
+
+/**
+ * Pick up, or put down on.
+ *
+ * Driven by `click`, not by a key. These are real buttons, so Enter and Space already produce a
+ * click and assistive technology can activate one with no key pressed at all — routing through
+ * activation rather than through a keystroke is what makes the mirror work for the people it
+ * exists for, and it gets Space for free.
+ */
+function activate(t: Target): void {
+  const occ =
+    t.kind === "plot" ? (garden.plots[t.index]?.occupant ?? null) : null;
+  const at = { x: plotXs[t.index] ?? W / 2, y: SOIL };
+
+  if (!held) {
+    // An empty plot holds nothing, so picking it up would arm a verb with no subject.
+    if (t.kind === "plot" && !occ) return;
+    held = t;
+    announce(t.kind === "plot" ? "picked up a flower" : "picked up a seed");
+    return;
+  }
+
+  const from = held;
+  held = null;
+
+  if (from.kind === "plot" && t.kind === "plot") {
+    const a = garden.plots[from.index]?.occupant;
+    // The plant that was picked up can have been replaced in the meantime — by a planting, or
+    // by a restore from the drawer. Holding a plot index is not holding a plant.
+    if (!a) return;
+    if (t.index === from.index) {
+      doSelf(a.genome, at);
+      announce("selfed");
+    } else if (occ) {
+      doCross(a.genome, occ.genome, at);
+      announce("crossed");
+    } else return;
+  } else if (from.kind === "seed" && t.kind === "plot") {
+    const seed = garden.tray[from.index];
+    if (!seed) return;
+    doPlant(seed.id, t.index);
+    announce("planted");
+  } else if (from.kind === "seed" && t.kind === "seed") {
+    const a = garden.tray[from.index];
+    const b = garden.tray[t.index];
+    if (!a || !b || a.id === b.id) return;
+    doSplice(a.id, b.id, at);
+    announce("spliced");
+  } else return;
+
+  afterVerb();
+}
+
+/** Everything a verb has to do afterwards, in one place, so the next verb cannot forget one. */
+function afterVerb(): void {
+  syncA11y();
+  scheduleSave();
+}
+
+/**
+ * The keys that are not activation.
+ *
+ * CLONE and READ need their own keys because the pointer distinguishes them by geometry and the
+ * keyboard cannot: a click on a bloom that never became a drag is a clone, and a click anywhere
+ * else on the plant opens its card. Focus lands on a plant, not on a pixel, so what the pointer
+ * infers has to be named.
+ */
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    if (held) {
+      held = null;
+      announce("put it back");
+      e.preventDefault();
+    }
+    return;
+  }
+
+  const t = focusedTarget();
+  if (!t || t.kind !== "plot") return;
+  const occ = garden.plots[t.index]?.occupant;
+  if (!occ) return;
+
+  if (e.key === "c" || e.key === "C") {
+    doClone(occ.genome, { x: plotXs[t.index] ?? W / 2, y: SOIL });
+    announce("cloned");
+    afterVerb();
+    e.preventDefault();
+  } else if (e.key === "r" || e.key === "R") {
+    inspecting = t.index;
+    learn("read");
+    renderCard();
+    e.preventDefault();
+  }
+});
+
+mountMirror(activate);
 
 function release(e: PointerEvent): void {
   const p = toCanvas(e);
@@ -1672,6 +1783,8 @@ Object.assign(window as unknown as Record<string, unknown>, {
     ),
     tray: garden.tray.map((s) => serialize(s.genome)),
   }),
+  /** What the keyboard is holding, so a driver can assert a pickup without reaching inside. */
+  __held: () => held,
   __traySlot: (i: number) => traySlot(i, W, H),
   __plotCount: () => plotXs.length,
   __plotX: (i: number) => plotXs[i],

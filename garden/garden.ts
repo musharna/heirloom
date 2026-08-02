@@ -8,7 +8,9 @@ import {
   plantSeed,
   sowFounders,
   spliceSeeds,
+  TRAY_CAP,
   type Garden,
+  type Planting,
 } from "../src/game/garden";
 import {
   carriedBy,
@@ -36,6 +38,14 @@ import {
   toSave,
   type ReplayEntry,
 } from "../src/game/save";
+import { grownLine, plotLabel, seedLabel } from "../src/game/describe";
+import {
+  announce,
+  focusedTarget,
+  mountMirror,
+  syncMirror,
+  type Target,
+} from "./a11y";
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
@@ -601,6 +611,7 @@ function cancelPress(): void {
 }
 
 canvas.addEventListener("pointerdown", (e) => {
+  usingKeys = false;
   const p = toCanvas(e);
   pointer = p;
   canvas.setPointerCapture(e.pointerId);
@@ -656,6 +667,231 @@ canvas.addEventListener("pointerup", (e) => {
   scheduleSave();
 });
 
+/**
+ * What the mirror last reflected.
+ *
+ * Cheap enough to compute every frame, which is the point: the alternative is a `syncA11y()`
+ * call at every site that mutates the garden, and that is the shape where the branch added next
+ * year forgets one. The labels are a function of occupancy and whether each plant has finished,
+ * so this signature changes exactly when a label would. It also catches `__seek`, which moves
+ * the clock without going through any verb at all.
+ */
+let a11ySig = "";
+
+/** Push the garden's current state into the hidden mirror, if any of it has changed. */
+function syncA11y(): void {
+  const sig =
+    `${garden.tray.length}|` +
+    garden.plots
+      .map((p) => (!p.occupant ? "-" : isGrown(p.occupant, now) ? "g" : "w"))
+      .join("");
+  if (sig === a11ySig) return;
+  a11ySig = sig;
+  syncMirror(
+    garden.plots.map((p, i) => plotLabel(i, p.occupant, now)),
+    garden.tray.map((_, i) => seedLabel(i, garden.tray.length)),
+  );
+}
+
+/**
+ * The five verbs, each one applied.
+ *
+ * Split out of `release()` because the keyboard has to fire the same verbs, and the version of
+ * this that lived inside the pointer handler could only be reached by inferring a verb from
+ * geometry. Two input paths separately deciding "which genome crosses with which" is a second
+ * hand-maintained copy of one truth — the mechanism that has already cost this project the
+ * enumerated CI driver list, the drive-persist coverage floor, and a README test count.
+ *
+ * `release()` keeps the geometry that decides WHICH verb a gesture meant. These decide what each
+ * verb DOES. `at` is only where the confirmation ring is drawn, so the keyboard can pass a plot's
+ * own position and get the same feedback without a pointer.
+ */
+function doCross(a: Genome, b: Genome, at: Vec2): void {
+  garden = addSeed(garden, crossOf(a, b, rand), {
+    parents: [serialize(a), serialize(b)],
+    origin: "cross",
+  });
+  learn("cross");
+  flash = { at, until: now + FLASH_TICKS };
+}
+
+function doSelf(g: Genome, at: Vec2): void {
+  garden = addSeed(garden, crossOf(g, g, rand), {
+    parents: [serialize(g), serialize(g)],
+    origin: "self",
+  });
+  learn("self");
+  flash = { at, until: now + FLASH_TICKS };
+}
+
+function doClone(g: Genome, at: Vec2): void {
+  garden = addSeed(garden, cloneOf(g, rand), {
+    parents: [serialize(g), serialize(g)],
+    origin: "clone",
+  });
+  learn("clone");
+  flash = { at, until: now + FLASH_TICKS };
+}
+
+function doSplice(aId: number, bId: number, at: Vec2): void {
+  garden = spliceSeeds(garden, aId, bId, rand);
+  flash = { at, until: now + FLASH_TICKS };
+}
+
+function doPlant(seedId: number, plotIndex: number): void {
+  garden = plantSeed(garden, seedId, plotIndex, SOIL, now);
+  learn("plant");
+  flash = { at: { x: plotXs[plotIndex]!, y: SOIL }, until: now + FLASH_TICKS };
+}
+
+/**
+ * What the keyboard is holding — the keyboard's analogue of `drag`.
+ *
+ * Deliberately NOT shared with `drag`. `drag` carries a canvas origin point, used to tell a
+ * click from a drag and so to tell CLONE from SELF. A key has no travel, so folding the two
+ * together would mean inventing an origin nobody measured and then reading a distance from it.
+ */
+let held: Target | null = null;
+
+/**
+ * Which input the player last used.
+ *
+ * The HUD teaches each verb until the player has performed it once, and it teaches GESTURES.
+ * Which gesture to name is not knowable from the verb alone.
+ */
+let usingKeys = false;
+
+/**
+ * Pick up, or put down on.
+ *
+ * Driven by `click`, not by a key. These are real buttons, so Enter and Space already produce a
+ * click and assistive technology can activate one with no key pressed at all — routing through
+ * activation rather than through a keystroke is what makes the mirror work for the people it
+ * exists for, and it gets Space for free.
+ */
+function activate(t: Target): void {
+  usingKeys = true;
+  const occ =
+    t.kind === "plot" ? (garden.plots[t.index]?.occupant ?? null) : null;
+  const at = { x: plotXs[t.index] ?? W / 2, y: SOIL };
+
+  if (!held) {
+    // An empty plot holds nothing, so picking it up would arm a verb with no subject.
+    if (t.kind === "plot" && !occ) return;
+    held = t;
+    announce(t.kind === "plot" ? "picked up a flower" : "picked up a seed");
+    return;
+  }
+
+  const from = held;
+  held = null;
+
+  if (from.kind === "plot" && t.kind === "plot") {
+    const a = garden.plots[from.index]?.occupant;
+    // The plant that was picked up can have been replaced in the meantime — by a planting, or
+    // by a restore from the drawer. Holding a plot index is not holding a plant.
+    if (!a) return;
+    if (t.index === from.index) {
+      doSelf(a.genome, at);
+      announce("selfed");
+    } else if (occ) {
+      doCross(a.genome, occ.genome, at);
+      announce("crossed");
+    } else return;
+  } else if (from.kind === "seed" && t.kind === "plot") {
+    const seed = garden.tray[from.index];
+    if (!seed) return;
+    doPlant(seed.id, t.index);
+    announce("planted");
+  } else if (from.kind === "seed" && t.kind === "seed") {
+    const a = garden.tray[from.index];
+    const b = garden.tray[t.index];
+    if (!a || !b || a.id === b.id) return;
+    doSplice(a.id, b.id, at);
+    announce("spliced");
+  } else return;
+
+  afterVerb();
+}
+
+/** Everything a verb has to do afterwards, in one place, so the next verb cannot forget one. */
+function afterVerb(): void {
+  // A full tray does not refuse — it DISCARDS, silently, dropping the OLDEST seed
+  // (`src/game/garden.ts:150`). That is worth saying out loud: a player who has just bred
+  // something and been handed nothing has no way to tell that from the verb having failed.
+  // Said after the verb's own announcement, deliberately, because losing a seed outranks it.
+  if (garden.tray.length === TRAY_CAP) {
+    announce("the tray is full — the oldest seed was lost");
+  }
+  syncA11y();
+  scheduleSave();
+}
+
+/**
+ * Plants whose completion has already been announced.
+ *
+ * Keyed on the `Planting` object rather than on a plot index or a seed id, matching the
+ * `WeakMap`-on-`Plant` pattern `src/game/hit.ts` uses for the memoised cull. A plot index would
+ * re-announce on every replacement in that plot; a seed id does not exist for a founder.
+ */
+const announcedGrown = new WeakSet<Planting>();
+
+/**
+ * Announce the one thing that happens without the player doing anything.
+ *
+ * Shares `isGrown` with `recordGrownPlants()` and nothing else. The notebook files evidence only
+ * for plants carrying a seed id and parents; this announces ANY plant finishing, founders
+ * included. Same predicate, different question — which is exactly why the predicate is imported
+ * rather than either of them re-deriving "has it finished".
+ */
+function announceGrown(): void {
+  for (let i = 0; i < garden.plots.length; i++) {
+    const p = garden.plots[i]?.occupant;
+    if (!p || announcedGrown.has(p) || !isGrown(p, now)) continue;
+    announcedGrown.add(p);
+    announce(grownLine(i, p, now));
+  }
+}
+
+/**
+ * The keys that are not activation.
+ *
+ * CLONE and READ need their own keys because the pointer distinguishes them by geometry and the
+ * keyboard cannot: a click on a bloom that never became a drag is a clone, and a click anywhere
+ * else on the plant opens its card. Focus lands on a plant, not on a pixel, so what the pointer
+ * infers has to be named.
+ */
+window.addEventListener("keydown", (e) => {
+  if (focusedTarget()) usingKeys = true;
+  if (e.key === "Escape") {
+    if (held) {
+      held = null;
+      announce("put it back");
+      e.preventDefault();
+    }
+    return;
+  }
+
+  const t = focusedTarget();
+  if (!t || t.kind !== "plot") return;
+  const occ = garden.plots[t.index]?.occupant;
+  if (!occ) return;
+
+  if (e.key === "c" || e.key === "C") {
+    doClone(occ.genome, { x: plotXs[t.index] ?? W / 2, y: SOIL });
+    announce("cloned");
+    afterVerb();
+    e.preventDefault();
+  } else if (e.key === "r" || e.key === "R") {
+    inspecting = t.index;
+    learn("read");
+    renderCard();
+    e.preventDefault();
+  }
+});
+
+mountMirror(activate);
+
 function release(e: PointerEvent): void {
   const p = toCanvas(e);
   const d = drag;
@@ -686,13 +922,7 @@ function release(e: PointerEvent): void {
     const onto = bloomAt(garden, p, now, 1.15, localToPlot);
     if (onto && onto.plotIndex !== d.plotIndex) {
       // CROSS — two different plants.
-      const partner = garden.plots[onto.plotIndex]!.occupant!.genome;
-      garden = addSeed(garden, crossOf(d.genome, partner, rand), {
-        parents: [serialize(d.genome), serialize(partner)],
-        origin: "cross",
-      });
-      learn("cross");
-      flash = { at: p, until: now + FLASH_TICKS };
+      doCross(d.genome, garden.plots[onto.plotIndex]!.occupant!.genome, p);
     } else if (onto && travelled >= CLICK_SLOP) {
       // SELF — a drag from one flower to ANOTHER FLOWER ON THE SAME PLANT.
       //
@@ -705,21 +935,11 @@ function release(e: PointerEvent): void {
       //
       // Distinguished from CLONE by travel alone, which is why the clone branch has to test
       // distance rather than simply catching everything that is not a cross.
-      garden = addSeed(garden, crossOf(d.genome, d.genome, rand), {
-        parents: [serialize(d.genome), serialize(d.genome)],
-        origin: "self",
-      });
-      learn("self");
-      flash = { at: p, until: now + FLASH_TICKS };
+      doSelf(d.genome, p);
     } else if (travelled < CLICK_SLOP) {
       // CLONE — a click that never became a drag. A clone is genetically its parent, so it
       // can never reveal a carrier; that is exactly why selfing had to exist.
-      garden = addSeed(garden, cloneOf(d.genome, rand), {
-        parents: [serialize(d.genome), serialize(d.genome)],
-        origin: "clone",
-      });
-      learn("clone");
-      flash = { at: p, until: now + FLASH_TICKS };
+      doClone(d.genome, p);
     }
     return;
   }
@@ -727,18 +947,13 @@ function release(e: PointerEvent): void {
   // A seed was dragged. Onto another seed it splices; onto the bed it plants.
   const onto = seedAt(garden, p, W, H);
   if (onto !== null && onto !== d.id) {
-    garden = spliceSeeds(garden, d.id, onto, rand);
-    flash = { at: p, until: now + FLASH_TICKS };
+    doSplice(d.id, onto, p);
     return;
   }
   const plot = plotAt(garden, p);
   // Only a drop above the tray line plants: dragging a seed sideways along the tray is
   // rearranging, not planting, and every x in the bed is within some plot's reach.
-  if (plot !== null && p.y < SOIL + 24) {
-    garden = plantSeed(garden, d.id, plot, SOIL, now);
-    learn("plant");
-    flash = { at: { x: plotXs[plot]!, y: SOIL }, until: now + FLASH_TICKS };
-  }
+  if (plot !== null && p.y < SOIL + 24) doPlant(d.id, plot);
 }
 
 canvas.addEventListener("pointerleave", () => {
@@ -1282,6 +1497,8 @@ function frame(): void {
   });
 
   recordGrownPlants();
+  announceGrown();
+  syncA11y();
 
   drawStage();
   forest.draw(ctx);
@@ -1547,6 +1764,18 @@ function teachingHint(): string | null {
 }
 
 function hint(): string {
+  // A keyboard player told to "drop it on another plant's flower" has been handed an instruction
+  // they cannot follow, by a game that appears not to know how it is being played. Naming the
+  // wrong gesture is worse than naming none.
+  if (usingKeys) {
+    if (held?.kind === "seed")
+      return "Enter on a plot to sow it · Escape to put it back";
+    if (held?.kind === "plot")
+      return "Enter on another plant to cross · Enter again here to self it";
+    return (
+      teachingHint() ?? "Tab to move · Enter to pick up · C clone · R read"
+    );
+  }
   if (drag?.kind === "seed") {
     const plot = dropTarget();
     if (plot !== null && garden.plots[plot]!.occupant)
@@ -1613,6 +1842,8 @@ Object.assign(window as unknown as Record<string, unknown>, {
     ),
     tray: garden.tray.map((s) => serialize(s.genome)),
   }),
+  /** What the keyboard is holding, so a driver can assert a pickup without reaching inside. */
+  __held: () => held,
   __traySlot: (i: number) => traySlot(i, W, H),
   __plotCount: () => plotXs.length,
   __plotX: (i: number) => plotXs[i],

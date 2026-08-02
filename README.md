@@ -134,6 +134,22 @@ garden already knows how to plant a seed.
 There is deliberately no button for this. The game has no menus, and a permanent "delete
 everything" control does not belong on a screen whose whole design is that it has none.
 
+## Without a pointer
+
+Tab moves between the nine plots and the seed tray. Enter picks up a plant or a seed and Enter
+again drops it — onto another plant to cross them, onto the same plant to self it, onto a plot to
+sow a seed, onto another seed to splice them. `C` clones, `R` reads the field notebook, Escape
+cancels.
+
+The canvas is hidden from screen readers and a parallel list of buttons carries the garden
+instead. Those labels obey the same rule the rest of the game does: a plant is not named until it
+has finished growing, and a seed is never named at all. Growing the plant is the reveal, and an
+accessible label is the easiest place to give that away by accident — so that is a negative
+control in the driver, not a comment.
+
+A plant finishing is announced, and so is the tray discarding its oldest seed, which it has
+always done silently.
+
 ## Architecture
 
 One-way pipeline; the renderer never sees a genome.
@@ -179,6 +195,8 @@ written after the workflow and shipped ungated, and nothing compared the two.
 - `tools/drive-notebook.mjs` — selfs a plant, grows the seedling, reads the card
 - `tools/drive-drawer.mjs` — retires plants, reopens them from the drawer, checks the thumbnails
   are different plants and that a restore adds no false evidence
+- `tools/drive-keyboard.mjs` — plays the garden with no pointer: tabs to a plot, crosses two
+  plants, and asserts an ungrown plant is never named
 - `tools/check-motion.mjs` — asserts the scene moves, the geometry does not, and it runs at 60fps
 - `tools/check-phone.mjs` — mobile viewport under CPU throttling, with measured floors
 - `npm run soak` — plays hundreds of rounds; watches save size, heap and frame rate

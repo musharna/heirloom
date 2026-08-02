@@ -7,6 +7,12 @@
  * two lists sat side by side with nothing comparing them. Deriving both from the same source —
  * the directory — is what makes them unable to disagree.
  *
+ * This file is deliberately named outside the `drive-*` prefix: CI's glob
+ * (.github/workflows/drivers.yml:83-94) and the filter below both match `tools/drive-*.mjs`.
+ * If this runner matched its own pattern, CI would execute it AND every driver it spawns
+ * individually — double-running the whole suite, silently, because both passes succeed. A name
+ * outside the prefix makes that collision impossible rather than something to remember to guard.
+ *
  * The `check-*` tools are deliberately NOT run here: they are judged one at a time and some are
  * performance measurements that are meaningless on a shared runner.
  */
@@ -17,10 +23,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const drivers = readdirSync(here)
-  .filter(
-    (f) =>
-      f.startsWith("drive-") && f.endsWith(".mjs") && f !== "drive-all.mjs",
-  )
+  .filter((f) => f.startsWith("drive-") && f.endsWith(".mjs"))
   .sort();
 
 // A glob that matches nothing is an empty gate reporting success. Same floor CI uses.

@@ -42,6 +42,30 @@ check(
   (await page.getAttribute('#c', 'aria-hidden')) === 'true',
 );
 
+// The announcements below are only ever HEARD because of `aria-live`. Every assertion in this
+// file reads `#say`'s textContent, which changes identically with or without the attribute — so
+// stripping it left the whole milestone feature silent to a screen reader while this driver
+// passed. Found by mutation; asserted here so it cannot happen again.
+check(
+  'the announcement region is a polite live region',
+  (await page.getAttribute('#say', 'aria-live')) === 'polite' &&
+    (await page.getAttribute('#say', 'aria-atomic')) === 'true',
+  `aria-live=${await page.getAttribute('#say', 'aria-live')} aria-atomic=${await page.getAttribute('#say', 'aria-atomic')}`,
+);
+
+// Likewise the instructions: nothing else in the game says the keys exist, and gutting the block
+// changed no assertion. A keyboard player who cannot discover the keys has no way in.
+const intro = await page.evaluate(() => {
+  const el = [...document.querySelectorAll('.sr')].find((n) => n.querySelector('h1'));
+  return el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+});
+const taught = ['Tab', 'Enter', 'C ', 'R ', 'Escape'].filter((k) => intro.includes(k));
+check(
+  'the hidden instructions name every key',
+  taught.length === 5,
+  `named ${taught.length}/5 in ${intro.length} chars`,
+);
+
 const labels = await names();
 const plotButtons = labels.filter((l) => l.startsWith('plot ')).length;
 check('one button per plot', plotButtons === 9, `saw ${plotButtons}`);
@@ -227,15 +251,28 @@ check(
 
 // A full tray DISCARDS the oldest seed rather than refusing. Fill it past the cap and expect to
 // be told, because a player handed nothing cannot otherwise tell that from the verb failing.
-await clearSaid();
+//
+// COUNTED from the observer log, like the assertion above, and for the same reason. This one was
+// left SAMPLING when that one was fixed, and it duly failed on CI: `announce()` blanks the region
+// before refilling it on the next frame, so a read landing in that gap sees "". It passed locally
+// several times first — the race is timing-dependent, which is exactly what makes a sampled read
+// of a self-clearing element the wrong instrument rather than merely an unlucky one.
+await page.evaluate(() => {
+  window.__saidLog = [];
+});
 const occ2 = (await state()).occupied;
 for (let i = 0; i < 14; i++) {
   await focusButton(occ2[0]);
   await page.keyboard.press('c');
 }
+await page.waitForTimeout(200);
 check('the tray is capped at twelve', (await state()).tray === 12, `tray ${(await state()).tray}`);
-const overflow = await said();
-check('overflowing the tray says a seed was lost', overflow.includes('oldest'), overflow);
+const overflowLog = await page.evaluate(() => window.__saidLog);
+check(
+  'overflowing the tray says a seed was lost',
+  overflowLog.some((t) => t.includes('oldest')),
+  overflowLog.length ? overflowLog.join(' | ') : '(nothing said)',
+);
 
 check('no page errors', errors.length === 0, errors.join(' · '));
 await browser.close();

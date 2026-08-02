@@ -18,8 +18,23 @@ import type { Plant } from "../types";
  * out of the drawer, which is the one thing a drawer must not do. Distinct from `founder`
  * because that asserts a plant with no history, and this one has plenty; it simply is not a
  * NEW observation, so it carries no parents and never reaches the notebook.
+ *
+ * Held as a RUNTIME value with the type derived from it, rather than as a bare type union. A
+ * union does not exist at runtime, so the save loader needed something to validate a string read
+ * off disk against — and it grew its own hand-written copy. The two then drifted: `archive` was
+ * added here and the loader never learned it, so a plant restored from the drawer lost its
+ * origin on every reload. One definition, and the loader tests membership against it.
  */
-export type Origin = "founder" | "clone" | "self" | "cross" | "archive";
+export const ORIGINS = [
+  "founder",
+  "clone",
+  "self",
+  "cross",
+  "archive",
+  "wild",
+] as const;
+
+export type Origin = (typeof ORIGINS)[number];
 
 /**
  * A seed. Carries a genome and its PROVENANCE — never its traits.

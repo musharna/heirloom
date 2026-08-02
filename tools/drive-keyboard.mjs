@@ -42,6 +42,30 @@ check(
   (await page.getAttribute('#c', 'aria-hidden')) === 'true',
 );
 
+// The announcements below are only ever HEARD because of `aria-live`. Every assertion in this
+// file reads `#say`'s textContent, which changes identically with or without the attribute — so
+// stripping it left the whole milestone feature silent to a screen reader while this driver
+// passed. Found by mutation; asserted here so it cannot happen again.
+check(
+  'the announcement region is a polite live region',
+  (await page.getAttribute('#say', 'aria-live')) === 'polite' &&
+    (await page.getAttribute('#say', 'aria-atomic')) === 'true',
+  `aria-live=${await page.getAttribute('#say', 'aria-live')} aria-atomic=${await page.getAttribute('#say', 'aria-atomic')}`,
+);
+
+// Likewise the instructions: nothing else in the game says the keys exist, and gutting the block
+// changed no assertion. A keyboard player who cannot discover the keys has no way in.
+const intro = await page.evaluate(() => {
+  const el = [...document.querySelectorAll('.sr')].find((n) => n.querySelector('h1'));
+  return el ? el.textContent.replace(/\s+/g, ' ').trim() : '';
+});
+const taught = ['Tab', 'Enter', 'C ', 'R ', 'Escape'].filter((k) => intro.includes(k));
+check(
+  'the hidden instructions name every key',
+  taught.length === 5,
+  `named ${taught.length}/5 in ${intro.length} chars`,
+);
+
 const labels = await names();
 const plotButtons = labels.filter((l) => l.startsWith('plot ')).length;
 check('one button per plot', plotButtons === 9, `saw ${plotButtons}`);

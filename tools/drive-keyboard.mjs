@@ -251,15 +251,28 @@ check(
 
 // A full tray DISCARDS the oldest seed rather than refusing. Fill it past the cap and expect to
 // be told, because a player handed nothing cannot otherwise tell that from the verb failing.
-await clearSaid();
+//
+// COUNTED from the observer log, like the assertion above, and for the same reason. This one was
+// left SAMPLING when that one was fixed, and it duly failed on CI: `announce()` blanks the region
+// before refilling it on the next frame, so a read landing in that gap sees "". It passed locally
+// several times first — the race is timing-dependent, which is exactly what makes a sampled read
+// of a self-clearing element the wrong instrument rather than merely an unlucky one.
+await page.evaluate(() => {
+  window.__saidLog = [];
+});
 const occ2 = (await state()).occupied;
 for (let i = 0; i < 14; i++) {
   await focusButton(occ2[0]);
   await page.keyboard.press('c');
 }
+await page.waitForTimeout(200);
 check('the tray is capped at twelve', (await state()).tray === 12, `tray ${(await state()).tray}`);
-const overflow = await said();
-check('overflowing the tray says a seed was lost', overflow.includes('oldest'), overflow);
+const overflowLog = await page.evaluate(() => window.__saidLog);
+check(
+  'overflowing the tray says a seed was lost',
+  overflowLog.some((t) => t.includes('oldest')),
+  overflowLog.length ? overflowLog.join(' | ') : '(nothing said)',
+);
 
 check('no page errors', errors.length === 0, errors.join(' · '));
 await browser.close();

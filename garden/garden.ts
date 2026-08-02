@@ -40,6 +40,21 @@ import {
 } from "../src/game/save";
 import { grownLine, plotLabel, seedLabel } from "../src/game/describe";
 import {
+  CARRIER_INTERVAL_TICKS,
+  canCarrierArrive,
+  pickPollen,
+} from "../src/game/pollinator";
+import {
+  drawInsects,
+  insects,
+  removeInsect,
+  spawnAmbient,
+  spawnCarrier,
+  takeExpired,
+  updateInsects,
+  type Insect,
+} from "./insects";
+import {
   announce,
   focusedTarget,
   mountMirror,
@@ -1008,6 +1023,38 @@ function paintHalo(at: Vec2, r: number, alpha: number, rgb = RING_PLANT): void {
  *
  * Blooms are tested first by the caller, so this only ever sees clicks on stems and foliage.
  */
+/** How many flowers are open anywhere in the bed — a carrier needs somewhere to land. */
+function bloomCount(): number {
+  return garden.plots.reduce(
+    (n, p) => n + (p.occupant ? bloomsOf(p.occupant, now).length : 0),
+    0,
+  );
+}
+
+/**
+ * A drawn bloom for a carrier to settle on, in CANVAS space, or null when nothing is open.
+ *
+ * Canvas space and not plant space, deliberately: plants are painted through a depth transform,
+ * so a bloom's position in its own plant's coordinates is not where it appears. An insect placed
+ * at the untransformed point would sit visibly away from the flower it is supposed to be on —
+ * the same trap `__blooms` documents for drivers aiming a pointer.
+ */
+function anyOpenBloom(): { plotIndex: number; x: number; y: number } | null {
+  const all = garden.plots.flatMap((plot, plotIndex) => {
+    const occ = plot.occupant;
+    if (!occ) return [];
+    const base = occ.plant.segments[0];
+    const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
+    const d = bedDepth(plotIndex);
+    return bloomsOf(occ, now).map((b) => {
+      const at = toCanvasSpace(b.center, anchor, d);
+      return { plotIndex, x: at.x, y: at.y };
+    });
+  });
+  if (!all.length) return null;
+  return all[Math.floor(rand() * all.length)] ?? null;
+}
+
 function plantAt(p: Vec2): number | null {
   let best: number | null = null;
   let bestD = Infinity;
@@ -1498,6 +1545,20 @@ function frame(): void {
 
   recordGrownPlants();
   announceGrown();
+  updateInsects(now, W);
+  // Ambient insects are cheap and unconditional. Carriers are rare and gated: `SPEED` ticks pass
+  // per frame, so dividing by the interval gives roughly one arrival per CARRIER_INTERVAL_TICKS
+  // ticks — about ninety seconds — and only when there is both somewhere to land and something
+  // to carry.
+  if (rand() < 0.003) spawnAmbient(W, H, rand);
+  if (
+    rand() < SPEED / CARRIER_INTERVAL_TICKS &&
+    canCarrierArrive(retirementLog, bloomCount())
+  ) {
+    const pollen = pickPollen(retirementLog, rand);
+    const spot = anyOpenBloom();
+    if (pollen && spot) spawnCarrier(pollen, spot.plotIndex, spot, now);
+  }
   syncA11y();
 
   drawStage();
@@ -1582,6 +1643,10 @@ function frame(): void {
       ctx.restore();
     }
   }
+
+  // After the bed, so an insect reads as being in front of the flower it has settled on rather
+  // than buried behind the canopy.
+  drawInsects(ctx, now);
 
   // Affordance: ring whatever the pointer could act on right now.
   const hover = drag ? null : bloomAt(garden, pointer, now, 1.15, localToPlot);
@@ -1844,6 +1909,27 @@ Object.assign(window as unknown as Record<string, unknown>, {
   }),
   /** What the keyboard is holding, so a driver can assert a pickup without reaching inside. */
   __held: () => held,
+  /** Live insects, so a driver can see one without waiting for a rare random arrival. */
+  __insects: () =>
+    insects().map((i) => ({
+      x: i.x,
+      y: i.y,
+      pollen: i.pollen,
+      plotIndex: i.plotIndex,
+    })),
+  /**
+   * Force a carrier onto a real open bloom. Returns false when nothing is in bloom.
+   *
+   * The alternative is a driver that waits for a once-every-ninety-seconds event, which is a
+   * flaky test by construction. The arrival RULE is unit-tested; this hook exists so the driver
+   * can test everything downstream of it.
+   */
+  __spawnCarrier: (pollen: string) => {
+    const spot = anyOpenBloom();
+    if (!spot) return false;
+    spawnCarrier(pollen, spot.plotIndex, spot, now);
+    return true;
+  },
   __traySlot: (i: number) => traySlot(i, W, H),
   __plotCount: () => plotXs.length,
   __plotX: (i: number) => plotXs[i],

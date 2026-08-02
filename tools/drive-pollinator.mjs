@@ -150,6 +150,58 @@ check(
 );
 check('and it left the mirror with its pollen', !(await names()).some((n) => n.includes('pollen')));
 
+
+// ── THE IGNORED CARRIER ──────────────────────────────────────────────────────────────────────
+// COUNTED through the observer, never sampled. announce() blanks the region before refilling it
+// on the next frame, so a textContent read lands in that gap and reports silence.
+await page.evaluate(() => {
+  window.__saidLog = [];
+  const el = document.getElementById('say');
+  new MutationObserver(() => {
+    const t = el.textContent.trim();
+    if (t) window.__saidLog.push(t);
+  }).observe(el, { childList: true, characterData: true, subtree: true });
+});
+const said = () => page.evaluate(() => window.__saidLog);
+
+await page.evaluate((g) => window.__spawnCarrier(g), donor);
+await page.waitForTimeout(200);
+check(
+  'a carrier arriving is announced',
+  (await said()).some((t) => t.includes('pollen')),
+  (await said()).join(' | ') || '(nothing said)',
+);
+
+// The outcome is FORCED, not waited for: a driver that waited on a one-in-seven event would be
+// flaky by construction. The probability itself is measured in test/pollinator.test.ts.
+const prePollinate = (await state()).tray;
+await page.evaluate(() => window.__expireCarriers(true));
+await page.waitForTimeout(200);
+check(
+  'an ignored carrier that pollinated leaves a seed',
+  (await state()).tray === prePollinate + 1,
+  `tray ${prePollinate} -> ${(await state()).tray}`,
+);
+check(
+  'and says so',
+  (await said()).some((t) => t.includes('pollinated')),
+  (await said()).join(' | '),
+);
+
+// NEGATIVE CONTROL: the same path with the roll going the other way must leave nothing behind.
+await page.evaluate((g) => window.__spawnCarrier(g), donor);
+await page.waitForTimeout(150);
+const preSkip = (await state()).tray;
+await page.evaluate(() => window.__expireCarriers(false));
+await page.waitForTimeout(200);
+check(
+  'CONTROL: an ignored carrier that did NOT pollinate leaves nothing',
+  (await state()).tray === preSkip,
+  `tray ${preSkip} -> ${(await state()).tray}`,
+);
+check('CONTROL: and it is gone from the mirror either way',
+  !(await names()).some((n) => n.includes('pollen')));
+
 check('no page errors', errors.length === 0, errors.join(' · '));
 await browser.close();
 console.log(failures ? `${failures} FAILED` : 'all pollinator checks passed');

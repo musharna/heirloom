@@ -5,6 +5,19 @@ branch, so the units here are **milestones**, newest first, dated by the commits
 them. Where a milestone retracted or reverted something, that is recorded too — a changelog that
 only lists what worked is a marketing document.
 
+## Pollinators — 2026-08-02
+
+- Insects visit the bed. Occasionally one carries pollen from a plant in the retirement log and
+  settles on a flower; drag it onto any bloom to cross it in. No fifth verb — a carrier is a drag
+  source like a bloom, resolved through the existing cross path.
+- An ignored carrier sometimes turns out to have pollinated the flower it was sitting on,
+  producing a seed recorded as a wild cross with honest parentage.
+- Carriers reach the keyboard and the screen reader, not only the canvas.
+- Fixed: `Origin` was written down twice — a type union and a save-loader whitelist — and had
+  already drifted, so a plant restored from the drawer lost its origin on every reload. The
+  origins now have one definition and the loader derives from it, which makes the next
+  divergence impossible rather than merely detectable.
+
 ## Keyboard and screen-reader access — 2026-08-02
 
 - The garden is playable with no pointer. Tab moves, Enter picks up and drops, `C` clones, `R`

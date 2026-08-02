@@ -48,6 +48,7 @@ import {
 import {
   CARRIER_INTERVAL_TICKS,
   canCarrierArrive,
+  didPollinate,
   pickPollen,
 } from "../src/game/pollinator";
 import {
@@ -869,6 +870,28 @@ function activate(t: Target): void {
   afterVerb();
 }
 
+/**
+ * A carrier has left. Did it pollinate on the way out?
+ *
+ * The parent is the flower it was ACTUALLY SITTING ON, never a random one. The player watched it
+ * settle there, so the surprise stays honest rather than arbitrary — and a seed whose parentage
+ * the player could not have predicted from what they saw would be evidence they cannot reason
+ * about.
+ *
+ * If that plant has since been replaced the cross is abandoned. Evidence about a plant that is
+ * no longer inspectable is evidence the player cannot act on.
+ */
+function resolveDeparture(bug: Insect, pollinated: boolean): void {
+  if (!pollinated || !bug.pollen) return;
+  const occ = garden.plots[bug.plotIndex]?.occupant;
+  if (!occ) return;
+  const pollen = parseGenome(bug.pollen);
+  if (!pollen.ok) return;
+  doCross(pollen.genome, occ.genome, { x: bug.x, y: bug.y }, "wild");
+  announce("a pollinator pollinated a flower before it left");
+  afterVerb();
+}
+
 /** Everything a verb has to do afterwards, in one place, so the next verb cannot forget one. */
 function afterVerb(): void {
   // A full tray does not refuse — it DISCARDS, silently, dropping the OLDEST seed
@@ -1616,6 +1639,7 @@ function frame(): void {
   recordGrownPlants();
   announceGrown();
   updateInsects(now, W);
+  for (const gone of takeExpired()) resolveDeparture(gone, didPollinate(rand));
   // Ambient insects are cheap and unconditional. Carriers are rare and gated: `SPEED` ticks pass
   // per frame, so dividing by the interval gives roughly one arrival per CARRIER_INTERVAL_TICKS
   // ticks — about ninety seconds — and only when there is both somewhere to land and something
@@ -1627,7 +1651,11 @@ function frame(): void {
   ) {
     const pollen = pickPollen(retirementLog, rand);
     const spot = anyOpenBloom();
-    if (pollen && spot) spawnCarrier(pollen, spot.plotIndex, spot, now);
+    if (pollen && spot) {
+      spawnCarrier(pollen, spot.plotIndex, spot, now);
+      // An arrival changes what the player can do, so it is a milestone rather than ambience.
+      announce(carrierLabel(pollen));
+    }
   }
   syncA11y();
 
@@ -2005,7 +2033,21 @@ Object.assign(window as unknown as Record<string, unknown>, {
     const spot = anyOpenBloom();
     if (!spot) return false;
     spawnCarrier(pollen, spot.plotIndex, spot, now);
+    announce(carrierLabel(pollen));
     return true;
+  },
+  /**
+   * Expire every carrier now, with the pollination roll FORCED.
+   *
+   * Removes the driver's dependence on a one-in-seven event. The probability itself is measured
+   * over twenty thousand draws in test/pollinator.test.ts, where it costs a millisecond instead
+   * of a browser and a wait that would sometimes be wrong.
+   */
+  __expireCarriers: (pollinated: boolean) => {
+    for (const bug of insects().filter((i) => i.pollen)) {
+      removeInsect(bug);
+      resolveDeparture(bug, pollinated);
+    }
   },
   __traySlot: (i: number) => traySlot(i, W, H),
   __plotCount: () => plotXs.length,

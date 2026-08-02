@@ -119,6 +119,21 @@ Nothing new is stored to make this work. The garden already kept the genome of e
 plant, to rebuild the background; the drawer just shows you that list. So a garden you grew
 before this existed opens with its history already in it.
 
+## Pollinators
+
+Insects drift through the bed. Occasionally one arrives carrying pollen from a plant you retired
+— the garden already keeps every retired genome to rebuild the background, so nothing new is
+stored — and settles on a flower. It says which plant the pollen came from. Drag it onto any
+bloom to cross that pollen in, and the seed is yours.
+
+Ignore it and it leaves. Sometimes it turns out to have pollinated the flower it was sitting on
+anyway, and a seed appears you did not ask for. That is the point rather than a concession:
+pollination happens whether you are watching, and what makes breeding _deliberate_ is that you
+intervened.
+
+It cannot happen in a new garden. A carrier needs a retirement log to draw from and an open
+flower to land on, so the first one cannot arrive until you have replaced something.
+
 ## Starting over
 
 The garden saves itself and comes back when you return. To wipe it and start fresh, add `#new`
@@ -197,6 +212,8 @@ written after the workflow and shipped ungated, and nothing compared the two.
   are different plants and that a restore adds no false evidence
 - `tools/drive-keyboard.mjs` — plays the garden with no pointer: tabs to a plot, crosses two
   plants, and asserts an ungrown plant is never named
+- `tools/drive-pollinator.mjs` — forces a carrier, crosses its pollen in by mouse and by
+  keyboard, and asserts an ignored one leaves a seed only when it pollinated
 - `tools/check-motion.mjs` — asserts the scene moves, the geometry does not, and it runs at 60fps
 - `tools/check-phone.mjs` — mobile viewport under CPU throttling, with measured floors
 - `npm run soak` — plays hundreds of rounds; watches save size, heap and frame rate

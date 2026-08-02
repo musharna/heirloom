@@ -8,7 +8,9 @@ import {
   plantSeed,
   sowFounders,
   spliceSeeds,
+  TRAY_CAP,
   type Garden,
+  type Planting,
 } from "../src/game/garden";
 import {
   carriedBy,
@@ -36,7 +38,7 @@ import {
   toSave,
   type ReplayEntry,
 } from "../src/game/save";
-import { plotLabel, seedLabel } from "../src/game/describe";
+import { grownLine, plotLabel, seedLabel } from "../src/game/describe";
 import {
   announce,
   focusedTarget,
@@ -804,8 +806,41 @@ function activate(t: Target): void {
 
 /** Everything a verb has to do afterwards, in one place, so the next verb cannot forget one. */
 function afterVerb(): void {
+  // A full tray does not refuse — it DISCARDS, silently, dropping the OLDEST seed
+  // (`src/game/garden.ts:150`). That is worth saying out loud: a player who has just bred
+  // something and been handed nothing has no way to tell that from the verb having failed.
+  // Said after the verb's own announcement, deliberately, because losing a seed outranks it.
+  if (garden.tray.length === TRAY_CAP) {
+    announce("the tray is full — the oldest seed was lost");
+  }
   syncA11y();
   scheduleSave();
+}
+
+/**
+ * Plants whose completion has already been announced.
+ *
+ * Keyed on the `Planting` object rather than on a plot index or a seed id, matching the
+ * `WeakMap`-on-`Plant` pattern `src/game/hit.ts` uses for the memoised cull. A plot index would
+ * re-announce on every replacement in that plot; a seed id does not exist for a founder.
+ */
+const announcedGrown = new WeakSet<Planting>();
+
+/**
+ * Announce the one thing that happens without the player doing anything.
+ *
+ * Shares `isGrown` with `recordGrownPlants()` and nothing else. The notebook files evidence only
+ * for plants carrying a seed id and parents; this announces ANY plant finishing, founders
+ * included. Same predicate, different question — which is exactly why the predicate is imported
+ * rather than either of them re-deriving "has it finished".
+ */
+function announceGrown(): void {
+  for (let i = 0; i < garden.plots.length; i++) {
+    const p = garden.plots[i]?.occupant;
+    if (!p || announcedGrown.has(p) || !isGrown(p, now)) continue;
+    announcedGrown.add(p);
+    announce(grownLine(i, p, now));
+  }
 }
 
 /**
@@ -1451,6 +1486,7 @@ function frame(): void {
   });
 
   recordGrownPlants();
+  announceGrown();
   syncA11y();
 
   drawStage();

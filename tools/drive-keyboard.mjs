@@ -167,6 +167,76 @@ check('R opens the card', (await page.getAttribute('#card', 'hidden')) === null)
 await page.keyboard.press('Escape');
 check('Escape closes the card', (await page.getAttribute('#card', 'hidden')) !== null);
 
+// ── MILESTONES ───────────────────────────────────────────────────────────────────────────────
+const said = () => page.evaluate(() => document.getElementById('say').textContent.trim());
+const clearSaid = () =>
+  page.evaluate(() => {
+    document.getElementById('say').textContent = '';
+  });
+
+// CONTROL: the region must read empty before any "it announced" claim is trusted. Without this
+// a region that never clears would make every announcement assertion pass on stale text.
+await clearSaid();
+check('CONTROL: the live region starts empty', (await said()) === '');
+
+// A plant finishing is announced.
+//
+// Tested by planting a NEW seed and running the clock forward, not by winding the clock back
+// over the plants already in the bed. Completion is recorded per Planting in a WeakSet, so a
+// plant that has already finished stays finished — correctly, since real time only moves one
+// way. Seeking backwards made this assertion unreachable and looked like a missing feature.
+const freshPlot = (await state()).empty;
+if (freshPlot >= 0) {
+  await focusButton(9);
+  await page.keyboard.press('Enter');
+  await focusButton(freshPlot);
+  await page.keyboard.press('Enter');
+}
+// COUNTED, not sampled.
+//
+// `announce()` blanks the region and re-fills it on the next frame, so reading `textContent`
+// samples a value that is empty half the time. Under a missing "already said this" guard the
+// region is being cleared sixty times a second, and a sampled read then catches the BLANK —
+// which reads as silence. Verified by mutation: deleting the guard made the sampled assertion
+// FAIL and a sampled "not repeated" control PASS, the exact wrong way round.
+//
+// Counting every non-empty transition is the measurement the claim actually needs.
+await page.evaluate(() => {
+  window.__saidLog = [];
+  const el = document.getElementById('say');
+  new MutationObserver(() => {
+    const t = el.textContent.trim();
+    if (t) window.__saidLog.push(t);
+  }).observe(el, { childList: true, characterData: true, subtree: true });
+});
+await page.evaluate(() => window.__seek(window.__now() + 100000));
+await page.waitForTimeout(400);
+const log = await page.evaluate(() => window.__saidLog);
+const finishes = log.filter((t) => /^plot \d+ finished: /.test(t));
+check('a plant finishing is announced', finishes.length > 0, finishes[0] ?? '(nothing said)');
+// CONTROL: and announced ONCE. The frame loop re-checks every plot sixty times a second; a
+// missing guard repeats the same sentence forever, which is the narration people switch off.
+// Uniqueness, not a count of one: more than one plant can finish in the same stretch, and each
+// message names its own plot. A missing guard repeats the SAME sentence, so duplicates are the
+// discriminator and a raw total is not.
+check(
+  'CONTROL: each plant is announced once, not every frame',
+  finishes.length === new Set(finishes).size,
+  `${finishes.length} announcements, ${new Set(finishes).size} distinct`,
+);
+
+// A full tray DISCARDS the oldest seed rather than refusing. Fill it past the cap and expect to
+// be told, because a player handed nothing cannot otherwise tell that from the verb failing.
+await clearSaid();
+const occ2 = (await state()).occupied;
+for (let i = 0; i < 14; i++) {
+  await focusButton(occ2[0]);
+  await page.keyboard.press('c');
+}
+check('the tray is capped at twelve', (await state()).tray === 12, `tray ${(await state()).tray}`);
+const overflow = await said();
+check('overflowing the tray says a seed was lost', overflow.includes('oldest'), overflow);
+
 check('no page errors', errors.length === 0, errors.join(' · '));
 await browser.close();
 console.log(failures ? `${failures} FAILED` : 'all keyboard checks passed');

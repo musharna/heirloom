@@ -28,23 +28,16 @@ export const SAVE_KEY = "heirloom.garden.v1";
  * frame or two.
  *
  * That cost has not gone away, and this constant no longer governs it — see
- * `BACKGROUND_REPLAY`. The two are deliberately separate because the drawer and the background
- * want opposite things from the same list: the drawer wants depth, the background wants to be
- * cheap and has nothing to gain past the point where a layer washes out under 5% contrast.
+ * `BACKGROUND_REPLAY` (now in `./layout`, not here — layout.ts is pure and canvas-free, and a
+ * read-only visit needs to reach it without importing this module at all). The two are
+ * deliberately separate because the drawer and the background want opposite things from the
+ * same list: the drawer wants depth, the background wants to be cheap and has nothing to gain
+ * past the point where a layer washes out under 5% contrast.
  *
  * What this cap now costs is parsing and storing genome STRINGS: 200 x 14 chars is under 3KB,
  * irrelevant beside the plants themselves.
  */
 export const REPLAY_CAP = 200;
-
-/**
- * How many retired plants are composited into the background on load.
- *
- * Held at the old REPLAY_CAP so load time is exactly what it was. Beyond this depth a layer has
- * washed out to under 5% contrast (see `effectiveDepth`) and would be invisible anyway, so
- * paying `growPlant` for it buys nothing.
- */
-export const BACKGROUND_REPLAY = 60;
 
 /** One retired plant: its genome, and where it stood. */
 export type ReplayEntry = { g: string; x: number };

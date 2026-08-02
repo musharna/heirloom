@@ -30,9 +30,13 @@ import {
   shownBlooms as bloomsOf,
   traySlot,
 } from "../src/game/hit";
-import { computeLayout, layoutChanged, type Layout } from "../src/game/layout";
 import {
   BACKGROUND_REPLAY,
+  computeLayout,
+  layoutChanged,
+  type Layout,
+} from "../src/game/layout";
+import {
   REPLAY_CAP,
   SAVE_KEY,
   fromSave,

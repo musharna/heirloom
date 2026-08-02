@@ -60,6 +60,15 @@ export const MAX_H = 470;
 export const MIN_PLOTS = 2;
 export const MAX_PLOTS = 9;
 
+/**
+ * How many retired plants are composited into the background on load.
+ *
+ * Held at the old REPLAY_CAP (see `./save`) so load time is exactly what it was. Beyond this
+ * depth a layer has washed out to under 5% contrast (see `effectiveDepth`) and would be
+ * invisible anyway, so paying `growPlant` for it buys nothing.
+ */
+export const BACKGROUND_REPLAY = 60;
+
 const clamp = (v: number, lo: number, hi: number): number =>
   Math.min(hi, Math.max(lo, v));
 

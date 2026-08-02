@@ -36,6 +36,8 @@ import {
   toSave,
   type ReplayEntry,
 } from "../src/game/save";
+import { plotLabel, seedLabel } from "../src/game/describe";
+import { syncMirror } from "./a11y";
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
@@ -655,6 +657,32 @@ canvas.addEventListener("pointerup", (e) => {
   // forgets to persist and the loss only shows up on the next reload.
   scheduleSave();
 });
+
+/**
+ * What the mirror last reflected.
+ *
+ * Cheap enough to compute every frame, which is the point: the alternative is a `syncA11y()`
+ * call at every site that mutates the garden, and that is the shape where the branch added next
+ * year forgets one. The labels are a function of occupancy and whether each plant has finished,
+ * so this signature changes exactly when a label would. It also catches `__seek`, which moves
+ * the clock without going through any verb at all.
+ */
+let a11ySig = "";
+
+/** Push the garden's current state into the hidden mirror, if any of it has changed. */
+function syncA11y(): void {
+  const sig =
+    `${garden.tray.length}|` +
+    garden.plots
+      .map((p) => (!p.occupant ? "-" : isGrown(p.occupant, now) ? "g" : "w"))
+      .join("");
+  if (sig === a11ySig) return;
+  a11ySig = sig;
+  syncMirror(
+    garden.plots.map((p, i) => plotLabel(i, p.occupant, now)),
+    garden.tray.map((_, i) => seedLabel(i, garden.tray.length)),
+  );
+}
 
 /**
  * The five verbs, each one applied.
@@ -1312,6 +1340,7 @@ function frame(): void {
   });
 
   recordGrownPlants();
+  syncA11y();
 
   drawStage();
   forest.draw(ctx);

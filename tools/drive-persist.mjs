@@ -103,6 +103,14 @@ check('a save was written', Boolean(stored) && stored.length > 40,
 // --- RELOAD ------------------------------------------------------------------------------
 await page.reload({ waitUntil: 'networkidle' });
 box = await ready();
+// Wait for the background DRAIN, not for a fixed sleep. `__ready` used to imply the background
+// was already composited, because the rebuild ran synchronously before it was ever set. It no
+// longer does: the rebuild is spread across frames on a 6ms budget so the garden is interactive
+// while past plants fill in, which means `__ready` and "the background is finished" are now two
+// different moments. Every assertion below reads background PIXELS, so it has to wait for the
+// second one. A fixed 250ms happened to cover a one-plant drain on a fast machine; it is a race
+// on a shared runner and at BACKGROUND_REPLAY entries it would lose outright.
+await page.waitForFunction(() => window.__restorePending() === 0, undefined, { timeout: 15000 });
 await page.waitForTimeout(250);
 
 const after = await state();
@@ -113,20 +121,26 @@ check('the same plants came back',
   `${JSON.stringify(afterCodes.plots)}`);
 check('the same seeds came back',
   JSON.stringify(afterCodes.tray) === JSON.stringify(savedCodes.tray));
-// The floor is LOW on purpose, and the low floor is what makes it honest.
+// NON-ZERO, not a floor. The floor was 1000, then 40, and it failed a third time at coverage
+// 14 — which is the tell: the constant keeps being re-derived from a sample of a distribution
+// whose legitimate low tail is unbounded. `placeRetired` draws a RANDOM depth, so a small plant
+// landing far back arrives at scale 0.64, alpha 0.28 and blur 3, and most of its pixels fall
+// under the alpha > 8 cut that `coverage()` itself counts by. Legitimate values measured here
+// span 14 to 15,672 — three orders of magnitude, by design, because the depth scatter is a
+// feature.
 //
-// It was 1000, which assumed every plant is a big one. Coverage depends entirely on WHICH
-// genome happened to retire: measured across seven runs it ranged 114 to 15,672, with several
-// legitimate runs landing at 1,703 and 2,733 — just over a threshold that was already inside
-// the population it was meant to accept. The 114 run was a correct rebuild of a genuinely tiny
-// plant (an albino seedling is a few dozen pixels of stem). This is the same defect that was
-// found and fixed in check-viewports.mjs and left standing here in the sibling file.
+// The floor also never bought what the previous version of this comment claimed. It asserted
+// that both guarded failure modes "read as ZERO", but check-viewports.mjs measured a genuinely
+// off-canvas composite at 157. So 40 did not separate that population either; it only rejected
+// small plants, which is precisely the false failure it kept producing.
 //
-// A low floor still discriminates, because both failure modes this guards against — nothing
-// composited, or composited off-canvas — read as ZERO, and the negative control below proves a
-// fresh garden reads zero. Geometry is check-viewports.mjs's job, not this one's.
+// What actually discriminates is `depth` — `Forest.retire` increments `layers` only AFTER the
+// composite completes, so a matching depth proves the plant was drawn, not merely queued — plus
+// a buffer that is not empty, with the negative control below proving a fresh garden reads
+// exactly 0. Off-canvas geometry belongs to check-viewports.mjs, which owns a viewport narrow
+// enough to actually produce it and a scale-free floor derived from the buffer's own area.
 check('the background was rebuilt from the replay list',
-  after.forestDepth === saved.retired && after.forestCoverage > 40,
+  after.forestDepth === saved.retired && after.forestCoverage > 0,
   `depth ${after.forestDepth} (retired ${saved.retired}, saved replay ${savedReplay}), coverage ${after.forestCoverage}`);
 check('no notice was shown — the save loaded cleanly',
   !(await hintText()).includes('rejected'), await hintText());

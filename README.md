@@ -155,7 +155,7 @@ canonical plant and a shared link reproduces it exactly.
 ## Tests
 
 ```sh
-npm test              # 332 unit tests
+npm test
 npx tsc --noEmit
 ```
 

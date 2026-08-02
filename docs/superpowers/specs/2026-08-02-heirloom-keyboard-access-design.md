@@ -102,11 +102,22 @@ driver, not a comment.**
 ## Labels and announcements
 
 Plot buttons read position, occupancy and state: `plot 4, empty`, `plot 2, growing`, `plot 6,
-white frilled, finished`. Tray buttons read the seed's short label and its origin. Labels are
-rebuilt when the garden mutates or a plot's growth state changes — not per frame.
+white frilled, finished`. Labels are rebuilt when the garden mutates or a plot's growth state
+changes — not per frame.
 
-One polite live region, firing on three things: a plant finished growing, a verb succeeded, a
-verb was refused.
+**Tray buttons carry position only** — `seed 3 of 5` — and this is the same non-disclosure rule
+applied one step further. Seeds are drawn as generic seeds; the HUD shows the newest seed's
+serialized code, which is opaque, and nothing in the game names a seed's traits or its parents.
+Labelling a tray seed `doubled crimson raceme, from a cross` would tell a screen-reader player
+what a sighted player cannot know, which is the same leak as describing an ungrown plant.
+
+This makes the tray genuinely hard to keep track of. That is not a defect in the mirror — a
+sighted player cannot tell their seeds apart either. Parity means equal, not better. If this
+turns out to make the game unplayable, the fix is to disclose seed origin **to everyone** in the
+visual game, and let the mirror follow; it is not to leak in the mirror alone.
+
+One polite live region, firing on three things: a plant finished growing, a verb succeeded, and
+the tray overflowed.
 
 Milestone state is keyed on `Planting` object identity in a `WeakSet`, matching the
 `WeakMap`-on-`Plant` pattern `src/game/hit.ts` already uses for the memoised cull, rather than
@@ -122,7 +133,11 @@ strings become input-aware: a player who last used a key should be taught keys, 
 
 ## Edges
 
-- Tray full announces the refusal rather than failing silently.
+- **A full tray does not refuse — it discards.** `addSeed` slices to `TRAY_CAP`
+  (`src/game/garden.ts:150`), dropping the **oldest** seed with no signal of any kind. An earlier
+  draft of this spec said the tray "refuses when full", which is simply not what the code does.
+  So the announcement is that a seed was discarded, not that a verb was refused. This is arguably
+  an under-communicated event in the visual game too, but fixing that is not in this pass.
 - Plot buttons persist per index, so replacing a plant cannot strand focus.
 - `Escape` closes the card and returns focus to the plant it described.
 - A held item that stops existing — planted, spliced — clears the hold and says so.

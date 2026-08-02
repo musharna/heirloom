@@ -102,20 +102,60 @@ constant moves.
 A pollinator cross is a real cross with real parents, so the notebook files real evidence and
 every deduction stays sound. It takes a new origin, `"wild"`.
 
-`Origin` is maintained in **two** places: the union in `src/game/garden.ts:22`, and a whitelist
-in the save loader at `src/game/save.ts:175`. That whitelist accepts `clone`, `self`, `cross` and
-`founder` — it does **not** accept `archive`, which is a legal origin the drawer sets. Today that
-is dormant rather than broken: archive seeds carry no parents, and every consumer of `origin`
-also requires parents, so the dropped value is unobservable.
+`Origin` is maintained in **two** places: the union in `src/game/garden.ts:22`, and a runtime
+whitelist in the save loader at `src/game/save.ts:175`. The whitelist accepts `clone`, `self`,
+`cross` and `founder` — it does **not** accept `archive`, which is a legal origin the drawer
+sets.
 
-It would not stay dormant. A `wild` seed **does** carry parents, so forgetting the whitelist
-would silently drop the origin on reload and the card would then describe a wild cross as a
-founder.
+**Root cause:** a restored plant's origin is lost across a reload because the set of legal origins
+is written down twice and nothing compares the two copies.
 
-This is the fourth appearance in this project of one mechanism: two hand-maintained lists with
-nothing comparing them, after the enumerated CI drivers, the coverage floor, and the README test
-count. So the fix is not to add one more entry by hand. It is a table-driven test that **every**
-`Origin` value round-trips through save and load, which fails the moment the two lists disagree.
+Established rather than assumed. `archive` entered the union in `bd3ab66`, a commit that touched
+only `src/game/garden.ts` and `test/game.test.ts` and never opened `save.ts`; the whitelist line
+has been edited exactly once, in `d2b0fba`, which predates it. Deliberate exclusion was ruled out
+by an asymmetry: `save.ts:124` and `:129` serialise `origin` **unconditionally**, including
+`archive`, while `:175` refuses to read it back — write-then-silently-drop is not a design, and
+`bd3ab66` shipped a test asserting the value is set.
+
+It is dormant today, verified by enumerating every read of `.origin`: the sole behavioural
+consumer is `garden/garden.ts:1106`, gated on `occ.parents`, which an archive seed never has.
+
+It would not stay dormant. A `wild` seed **does** carry parents, so the same drift would drop the
+origin on reload and the card would describe a wild cross as a founder.
+
+### The fix is to remove the second list, not to detect it
+
+This is the fourth appearance in this project of one mechanism — two hand-maintained lists with
+nothing comparing them — after the enumerated CI drivers, the coverage floor and the README test
+count. Each earlier time, the fix that held removed the copy.
+
+A table-driven round-trip test over every `Origin` was the first thing considered here, and it is
+**not** the causal fix. It leaves both lists standing: a future origin still needs two edits, and
+the test only converts a silent failure into a loud one. That is a tripwire, not mechanism
+removal.
+
+The causal fix is to give the legal origins **one** definition and derive the validator from it.
+A TypeScript union does not exist at runtime, which is precisely why a second, runtime copy got
+written in the first place — so the single source has to be the runtime value:
+
+```ts
+export const ORIGINS = [
+  "founder",
+  "clone",
+  "self",
+  "cross",
+  "archive",
+  "wild",
+] as const;
+export type Origin = (typeof ORIGINS)[number];
+```
+
+and the loader tests membership against `ORIGINS` instead of restating it. Adding an origin then
+becomes one edit, and divergence becomes impossible rather than merely detectable. Roughly six
+lines across two files — no larger than the band-aid it replaces.
+
+The round-trip test still ships, demoted to what it actually is: a cheap regression guard on top
+of a fix that has already made the failure structurally impossible.
 
 ## Persistence
 

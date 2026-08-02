@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { randomGenome } from "../src/genome/genome";
-import { serialize } from "../src/genome/serialize";
+import {
+  BitWriter,
+  PAYLOAD_BYTES,
+  bytesToBase64Url,
+  checksumOf,
+  serialize,
+  writeGenomeBits,
+} from "../src/genome/serialize";
 import { mulberry32 } from "../src/rng";
+import {
+  BACKGROUND_REPLAY,
+  MIN_PLOTS,
+  computeLayout,
+} from "../src/game/layout";
 import {
   POSTCARD_VERSION,
   packPostcard,
@@ -24,6 +36,26 @@ function sample(plots: number, forest: number): Postcard {
       x: 100 + i * 3,
     })),
   };
+}
+
+/** The raw payload bytes for one genome, via the shared writer — not a second bit-packer. */
+function genomeBytes(): number[] {
+  const w = new BitWriter(PAYLOAD_BYTES);
+  writeGenomeBits(w, randomGenome(rand));
+  return Array.from(w.bytes);
+}
+
+/**
+ * Hand-build a postcard from raw body bytes (everything except the checksum) and append a
+ * correct checksum, the same way `packPostcard` does. Used to construct malformed/boundary
+ * inputs `packPostcard` itself would never produce — hostile or truncated buffers — since the
+ * decoder has to defend against those independent of what the encoder emits.
+ */
+function encode(body: number[]): string {
+  const out = new Uint8Array(body.length + 1);
+  out.set(body, 0);
+  out[out.length - 1] = checksumOf(out, out.length - 1);
+  return bytesToBase64Url(out);
 }
 
 describe("the postcard codec", () => {
@@ -64,13 +96,28 @@ describe("the postcard codec", () => {
     expect(r.postcard.forest).toEqual([]);
   });
 
-  it("survives a 9-plot garden being read on a 2-plot device", () => {
-    // Nothing in the codec consults the local layout. This is the cross-device case that a
-    // same-device test cannot see, and the reason the plot count is carried at all.
-    const r = readPostcard(packPostcard(sample(9, 5)));
+  it("decodes a 9-plot garden's plot genomes unaffected by a 2-plot local layout", () => {
+    // Fix round 1: the original version of this test only asserted plotCount === 9, which
+    // "round-trips a full garden byte-exact" above already covers, and it would have passed
+    // against a decoder that silently clamped to a local device's own plot count. Grounded for
+    // real here: first confirm a narrow viewport's OWN layout really would produce fewer plots
+    // than the sender's garden, then show that fact never reaches readPostcard at all — it
+    // takes only the encoded string, decodes every one of the sender's 9 plots, and the decoded
+    // genomes are byte-identical to what was packed regardless of what geometry decoded it.
+    const narrowDevice = computeLayout(360, 430);
+    expect(narrowDevice.plotXs.length).toBeLessThan(9);
+
+    const p = sample(9, 5);
+    const r = readPostcard(packPostcard(p));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.postcard.plotCount).toBe(9);
+    expect(r.postcard.plots).toHaveLength(9);
+    for (const [i, plot] of p.plots.entries()) {
+      const got = r.postcard.plots[i];
+      if (plot === null) expect(got).toBeNull();
+      else expect(serialize(got!.genome)).toBe(serialize(plot.genome));
+    }
   });
 
   it("caps the forest at 60 entries", () => {
@@ -125,5 +172,74 @@ describe("the postcard codec", () => {
 
   it("declares its version", () => {
     expect(POSTCARD_VERSION).toBe(1);
+  });
+
+  // --- Fix round 1: truncation guards previously had zero test coverage. ---
+
+  it("names truncation when the bed data runs out mid-record", () => {
+    // A valid header claiming ONE occupied plot, then only 3 of that plot's 11 record bytes
+    // (1 index + 8 genome + 2 age) before the buffer ends. Long enough to clear the "too
+    // short" floor (9 bytes) but far short of the full record, so this exercises need()'s
+    // bed-loop call specifically, not the length floor.
+    const body = [
+      POSTCARD_VERSION,
+      100,
+      0, // W = 100
+      100,
+      0, // H = 100
+      3, // plotCount
+      1, // occupied count
+      0, // plot index
+      0,
+      0,
+      0, // 3 of 8 genome bytes, then nothing
+    ];
+    const r = readPostcard(encode(body));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/ends mid-bed/);
+  });
+
+  it("names the bed size when plotCount exceeds the maximum", () => {
+    const body = [POSTCARD_VERSION, 100, 0, 100, 0, 200, 0, 0];
+    const r = readPostcard(encode(body));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/200/);
+  });
+
+  it("rejects a plotCount of 0 rather than decoding an ok bedless garden", () => {
+    const body = [POSTCARD_VERSION, 100, 0, 100, 0, 0, 0, 0];
+    const r = readPostcard(encode(body));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(new RegExp(`fewest|${MIN_PLOTS}`));
+  });
+
+  it("rejects a forest count over BACKGROUND_REPLAY even with full data present", () => {
+    // Not a truncated buffer: every one of the 61 claimed forest entries has real, complete
+    // (genome + x) data behind it, so the existing need() length guard is satisfied and would
+    // let this through. Only the explicit BACKGROUND_REPLAY cap can reject it — proving the
+    // encoder's cap (BACKGROUND_REPLAY) and the decoder's cap are the same one definition, not
+    // a hand-built link's word against a hash that isn't a MAC.
+    const forestCount = BACKGROUND_REPLAY + 1;
+    const g = genomeBytes();
+    const entries: number[] = [];
+    for (let i = 0; i < forestCount; i++) entries.push(...g, 0, 0);
+    const body = [
+      POSTCARD_VERSION,
+      100,
+      0, // W
+      100,
+      0, // H
+      2, // plotCount
+      0, // occupied count
+      forestCount,
+      ...entries,
+    ];
+    const r = readPostcard(encode(body));
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/forest/);
   });
 });

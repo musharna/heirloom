@@ -9,7 +9,7 @@ import {
   readGenomeBits,
   writeGenomeBits,
 } from "../genome/serialize";
-import { BACKGROUND_REPLAY, MAX_PLOTS } from "./layout";
+import { BACKGROUND_REPLAY, MAX_PLOTS, MIN_PLOTS } from "./layout";
 
 /**
  * A whole garden, packed for a URL fragment.
@@ -22,6 +22,23 @@ export const POSTCARD_VERSION = 1;
 
 /** Ages are two bytes. Past `maxTick` a plant is finished, so the ceiling costs nothing. */
 const MAX_AGE = 0xffff;
+
+/**
+ * Upper bound on a postcard's raw byte length, computed from the format's own parts rather than
+ * a guessed literal. Checked immediately after the base64 decode, BEFORE `checksumOf` runs:
+ * `checksumOf` builds a JS string one character at a time across the whole buffer, so without
+ * this a multi-megabyte hostile fragment would pay that cost before any structural check ran.
+ */
+export const POSTCARD_MAX_BYTES =
+  1 + // version
+  2 + // W
+  2 + // H
+  1 + // plot count
+  1 + // occupied count
+  MAX_PLOTS * (1 + PAYLOAD_BYTES + 2) + // occupied plots: index + genome + age
+  1 + // forest count
+  BACKGROUND_REPLAY * (PAYLOAD_BYTES + 2) + // forest entries: genome + x
+  1; // checksum
 
 export type PostcardPlot = { genome: Genome; age: number };
 
@@ -96,8 +113,15 @@ export function readPostcard(s: string): PostcardResult {
       ok: false,
       error: "not base64url — illegal character in garden code",
     };
-  // Shortest legal postcard: version + W + H + plotCount + 0 occupied + 0 forest + checksum.
-  if (bytes.length < 8)
+  // Checked before checksumOf touches the buffer — see POSTCARD_MAX_BYTES.
+  if (bytes.length > POSTCARD_MAX_BYTES)
+    return {
+      ok: false,
+      error: `garden code is too long: ${bytes.length} bytes (max ${POSTCARD_MAX_BYTES})`,
+    };
+  // Shortest legal postcard: version + W + H + plotCount + occupied count + forest count +
+  // checksum = 1+2+2+1+1+1+1 = 9 bytes.
+  if (bytes.length < 9)
     return {
       ok: false,
       error: `garden code is too short: ${bytes.length} bytes`,
@@ -141,6 +165,11 @@ export function readPostcard(s: string): PostcardResult {
       ok: false,
       error: `garden claims ${plotCount} plots (the most is ${MAX_PLOTS})`,
     };
+  if (plotCount < MIN_PLOTS)
+    return {
+      ok: false,
+      error: `garden claims ${plotCount} plots (the fewest is ${MIN_PLOTS})`,
+    };
 
   bad = need(1, "bed");
   if (bad) return { ok: false, error: bad };
@@ -155,12 +184,30 @@ export function readPostcard(s: string): PostcardResult {
     const index = bytes[at++]!;
     const genome = readGenome();
     const age = read16();
-    if (index < plotCount) plots[index] = { genome, age };
+    // Both must fail loud: plotCount is carried INSIDE this same postcard, so an index beyond
+    // it, or a repeat of one already seen, is internally inconsistent — not version skew that
+    // deserves silent tolerance.
+    if (index >= plotCount)
+      return {
+        ok: false,
+        error: `plot ${index} is outside a ${plotCount}-plot bed`,
+      };
+    if (plots[index] !== null)
+      return {
+        ok: false,
+        error: `plot ${index} appears twice in this garden`,
+      };
+    plots[index] = { genome, age };
   }
 
   bad = need(1, "forest");
   if (bad) return { ok: false, error: bad };
   const count = bytes[at++]!;
+  if (count > BACKGROUND_REPLAY)
+    return {
+      ok: false,
+      error: `garden claims ${count} forest entries (the most is ${BACKGROUND_REPLAY})`,
+    };
   const forest: { genome: Genome; x: number }[] = [];
   for (let n = 0; n < count; n++) {
     bad = need(PAYLOAD_BYTES + 2, "forest");

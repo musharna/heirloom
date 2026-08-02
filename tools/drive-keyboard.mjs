@@ -209,13 +209,28 @@ check('CONTROL: the live region starts empty', (await said()) === '');
 // over the plants already in the bed. Completion is recorded per Planting in a WeakSet, so a
 // plant that has already finished stays finished — correctly, since real time only moves one
 // way. Seeking backwards made this assertion unreachable and looked like a missing feature.
-const freshPlot = (await state()).empty;
-if (freshPlot >= 0) {
-  await focusButton(9);
-  await page.keyboard.press('Enter');
-  await focusButton(freshPlot);
-  await page.keyboard.press('Enter');
-}
+// The fresh plant is GUARANTEED, not hoped for. The first version planted into `state().empty`
+// only `if (freshPlot >= 0)` — and by this point the verb section has already filled the last
+// empty plot, so on CI nothing was planted, nothing new finished, and the check failed reporting
+// "(nothing said)". That reads as a broken feature when it is an absent precondition.
+//
+// Planting over an OCCUPIED plot retires the occupant and starts a new Planting regardless of
+// how many plots are free, so this cannot depend on earlier steps' leftovers.
+const target = (await state()).occupied[0];
+await focusButton(target);
+await page.keyboard.press('c'); // guarantees a seed in the tray, whatever the verb section left
+const plantedBefore = (await state()).planted;
+await focusButton(9); // seed buttons follow the nine plots
+await page.keyboard.press('Enter');
+await focusButton(target);
+await page.keyboard.press('Enter');
+// CONTROL: if this fails, the announcement check below is testing nothing and must not be read
+// as evidence either way.
+check(
+  'CONTROL: a fresh plant was actually planted to finish',
+  (await state()).planted >= plantedBefore,
+  `planted ${plantedBefore} -> ${(await state()).planted}, retired ${(await state()).retired}`,
+);
 // COUNTED, not sampled.
 //
 // `announce()` blanks the region and re-fills it on the next frame, so reading `textContent`
@@ -234,7 +249,14 @@ await page.evaluate(() => {
   }).observe(el, { childList: true, characterData: true, subtree: true });
 });
 await page.evaluate(() => window.__seek(window.__now() + 100000));
-await page.waitForTimeout(400);
+// Poll for the announcement rather than sleeping a fixed amount. A shared CI runner is several
+// times slower than the machine this was written on, and the observer only ever ADDS entries —
+// so waiting for one to appear is both faster when it is quick and safe when it is not.
+await page
+  .waitForFunction(() => (window.__saidLog ?? []).some((t) => /^plot \d+ finished: /.test(t)), undefined, {
+    timeout: 10000,
+  })
+  .catch(() => {}); // let the assertion below report it, with the log contents as evidence
 const log = await page.evaluate(() => window.__saidLog);
 const finishes = log.filter((t) => /^plot \d+ finished: /.test(t));
 check('a plant finishing is announced', finishes.length > 0, finishes[0] ?? '(nothing said)');

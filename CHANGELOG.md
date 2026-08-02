@@ -5,6 +5,21 @@ branch, so the units here are **milestones**, newest first, dated by the commits
 them. Where a milestone retracted or reverted something, that is recorded too — a changelog that
 only lists what worked is a marketing document.
 
+## Keyboard and screen-reader access — 2026-08-02
+
+- The garden is playable with no pointer. Tab moves, Enter picks up and drops, `C` clones, `R`
+  reads the field notebook, Escape cancels.
+- The canvas is hidden from assistive technology and a parallel list of buttons carries the bed
+  and the tray. Labels obey non-disclosure: a plant is not named until it has finished growing,
+  and a seed is never named — verified by mutation at both the unit and the browser layer.
+- A plant finishing is announced, and so is the tray discarding its oldest seed, which it has
+  always done silently.
+- The five verbs were extracted out of the pointer handler so both input paths call one
+  implementation rather than two that drift.
+- Fixed, in the tests rather than the game: a "not announced twice" control that passed on broken
+  code, because it sampled a live region that blanks between announcements instead of counting
+  them.
+
 ## Deploy gate and performance — 2026-08-01
 
 - The behavioural drivers now gate the deploy. Typecheck, unit tests and a successful build all

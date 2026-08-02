@@ -611,6 +611,7 @@ function cancelPress(): void {
 }
 
 canvas.addEventListener("pointerdown", (e) => {
+  usingKeys = false;
   const p = toCanvas(e);
   pointer = p;
   canvas.setPointerCapture(e.pointerId);
@@ -753,6 +754,14 @@ function doPlant(seedId: number, plotIndex: number): void {
 let held: Target | null = null;
 
 /**
+ * Which input the player last used.
+ *
+ * The HUD teaches each verb until the player has performed it once, and it teaches GESTURES.
+ * Which gesture to name is not knowable from the verb alone.
+ */
+let usingKeys = false;
+
+/**
  * Pick up, or put down on.
  *
  * Driven by `click`, not by a key. These are real buttons, so Enter and Space already produce a
@@ -761,6 +770,7 @@ let held: Target | null = null;
  * exists for, and it gets Space for free.
  */
 function activate(t: Target): void {
+  usingKeys = true;
   const occ =
     t.kind === "plot" ? (garden.plots[t.index]?.occupant ?? null) : null;
   const at = { x: plotXs[t.index] ?? W / 2, y: SOIL };
@@ -852,6 +862,7 @@ function announceGrown(): void {
  * infers has to be named.
  */
 window.addEventListener("keydown", (e) => {
+  if (focusedTarget()) usingKeys = true;
   if (e.key === "Escape") {
     if (held) {
       held = null;
@@ -1753,6 +1764,18 @@ function teachingHint(): string | null {
 }
 
 function hint(): string {
+  // A keyboard player told to "drop it on another plant's flower" has been handed an instruction
+  // they cannot follow, by a game that appears not to know how it is being played. Naming the
+  // wrong gesture is worse than naming none.
+  if (usingKeys) {
+    if (held?.kind === "seed")
+      return "Enter on a plot to sow it · Escape to put it back";
+    if (held?.kind === "plot")
+      return "Enter on another plant to cross · Enter again here to self it";
+    return (
+      teachingHint() ?? "Tab to move · Enter to pick up · C clone · R read"
+    );
+  }
   if (drag?.kind === "seed") {
     const plot = dropTarget();
     if (plot !== null && garden.plots[plot]!.occupant)

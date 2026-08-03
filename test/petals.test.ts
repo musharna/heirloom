@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { petalPath, petalColor, petalGlow } from "../src/render/petals";
+import {
+  petalPath,
+  petalColor,
+  petalGlow,
+  paintPetal,
+  PETAL_SHADING_MIN_WIDTH,
+} from "../src/render/petals";
 import type { PetalSpec, PetalShape } from "../src/types";
 
 describe("petalGlow", () => {
@@ -151,5 +157,65 @@ describe("petalColor", () => {
 
   it("falls back rather than returning undefined for an out-of-range hue class", () => {
     expect(petalColor(99, false, 0)).toMatch(/^hsl\(/);
+  });
+});
+
+describe("interior shading is skipped on petals too narrow to show it", () => {
+  /** Records which context calls were made, and draws nothing. */
+  function recorder(): {
+    ctx: CanvasRenderingContext2D;
+    calls: Record<string, number>;
+  } {
+    const calls: Record<string, number> = {};
+    const bump = (k: string): void => {
+      calls[k] = (calls[k] ?? 0) + 1;
+    };
+    const ctx = new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          const name = String(prop);
+          if (name === "createRadialGradient" || name === "createLinearGradient")
+            return () => {
+              bump(name);
+              return { addColorStop: () => undefined };
+            };
+          return () => bump(name);
+        },
+        set: () => true,
+      },
+    ) as CanvasRenderingContext2D;
+    return { ctx, calls };
+  }
+
+  const spec = (width: number): PetalSpec => ({
+    center: { x: 0, y: 0 },
+    angle: 0,
+    length: 20,
+    width,
+    shape: "round",
+    colorDepth: 0,
+  });
+  const pts = [
+    { x: 0, y: 0 },
+    { x: 20, y: 4 },
+    { x: 20, y: -4 },
+  ];
+
+  it("draws no gradients for a petal narrower than the threshold", () => {
+    const { ctx, calls } = recorder();
+    paintPetal(ctx, spec(PETAL_SHADING_MIN_WIDTH - 1), pts, "#f0f", "#111", 1, 0, false);
+    expect(calls["createRadialGradient"] ?? 0).toBe(0);
+    // Positive control: the petal is still drawn — filled and outlined, not skipped.
+    expect(calls["fill"] ?? 0).toBeGreaterThan(0);
+    expect(calls["stroke"] ?? 0).toBeGreaterThan(0);
+  });
+
+  it("still shades a petal wide enough to show it", () => {
+    const { ctx, calls } = recorder();
+    paintPetal(ctx, spec(PETAL_SHADING_MIN_WIDTH + 6), pts, "#f0f", "#111", 1, 0, false);
+    // The tip glow and the base pool.
+    expect(calls["createRadialGradient"]).toBe(2);
+    expect(calls["clip"] ?? 0).toBeGreaterThan(0);
   });
 });

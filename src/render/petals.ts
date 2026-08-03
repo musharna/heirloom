@@ -247,6 +247,24 @@ export function petalRimWidth(petalWidth: number): number {
 }
 
 /**
+ * Petal width below which the interior shading is skipped.
+ *
+ * The shading is a gradient ACROSS the petal, so what decides whether it can read is the
+ * petal's width, not its length. Below five pixels there is no room for a gradient to be a
+ * gradient: it resolves to two or three pixels of flat tint that the rim then covers most of.
+ *
+ * Width falls as petals-per-whorl rises, because they share the circumference — which is why
+ * this bites exactly where the cost is worst. A doubled twelve-petal umbel packs sixteen
+ * petals per whorl, three whorls deep, into a bloom ~10px across; each petal is a few pixels
+ * wide and carries two clipped radial gradients. That is the most expensive flower in the
+ * game rendering detail nobody can see.
+ *
+ * `spec.length > 7` below already concedes this point for the midrib. The gradients cost far
+ * more than the midrib does and had no such rule.
+ */
+export const PETAL_SHADING_MIN_WIDTH = 5;
+
+/**
  * A petal, with light coming through it.
  *
  * The previous petal was a fill plus a rim, and light passing THROUGH is the defining quality
@@ -287,6 +305,16 @@ export function paintPetal(
   ctx.fillStyle = fill;
   ctx.fill();
 
+  // Too narrow for the shading to read: fill and rim only, and skip the clip, the two radial
+  // gradients and the midrib entirely. `ctx.fill()` leaves the current path intact, so the rim
+  // can stroke the path `trace()` just built without re-tracing it.
+  if (spec.width < PETAL_SHADING_MIN_WIDTH) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = rimWidth;
+    ctx.stroke();
+    return;
+  }
+
   const cx = spec.center.x;
   const cy = spec.center.y;
   const tipX = cx + Math.cos(spec.angle) * spec.length;
@@ -296,7 +324,14 @@ export function paintPetal(
   ctx.clip();
 
   // Light through the thin outer margin.
-  const glow = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, spec.length * 0.75);
+  const glow = ctx.createRadialGradient(
+    tipX,
+    tipY,
+    0,
+    tipX,
+    tipY,
+    spec.length * 0.75,
+  );
   glow.addColorStop(0, petalGlow(hueClass, white, white ? 0.3 : 0.26));
   glow.addColorStop(1, petalGlow(hueClass, white, 0));
   ctx.fillStyle = glow;
@@ -324,10 +359,14 @@ export function paintPetal(
     ctx.strokeStyle = petalGlow(hueClass, white, 0.22);
     ctx.lineWidth = Math.max(0.5, spec.width * 0.06);
     ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(spec.angle) * spec.length * 0.12,
-               cy + Math.sin(spec.angle) * spec.length * 0.12);
-    ctx.lineTo(cx + Math.cos(spec.angle) * spec.length * 0.86,
-               cy + Math.sin(spec.angle) * spec.length * 0.86);
+    ctx.moveTo(
+      cx + Math.cos(spec.angle) * spec.length * 0.12,
+      cy + Math.sin(spec.angle) * spec.length * 0.12,
+    );
+    ctx.lineTo(
+      cx + Math.cos(spec.angle) * spec.length * 0.86,
+      cy + Math.sin(spec.angle) * spec.length * 0.86,
+    );
     ctx.stroke();
   }
   ctx.restore();

@@ -3,6 +3,7 @@ import { randomGenome } from "../src/genome/genome";
 import {
   BitWriter,
   PAYLOAD_BYTES,
+  base64UrlToBytes,
   bytesToBase64Url,
   checksumOf,
   serialize,
@@ -11,10 +12,12 @@ import {
 import { mulberry32 } from "../src/rng";
 import {
   BACKGROUND_REPLAY,
+  MAX_PLOTS,
   MIN_PLOTS,
   computeLayout,
 } from "../src/game/layout";
 import {
+  POSTCARD_MAX_BYTES,
   POSTCARD_VERSION,
   packPostcard,
   readPostcard,
@@ -241,5 +244,48 @@ describe("the postcard codec", () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toMatch(/forest/);
+  });
+
+  // --- Fix round 2: the legitimate maximum must still decode. ---
+
+  it("decodes a legitimate maximum-size postcard — every plot occupied, forest at its cap", () => {
+    // This is the input POSTCARD_MAX_BYTES is closest to rejecting: a fully-planted garden
+    // with a long history, which is to say the flagship postcard anyone would actually want to
+    // share. `sample()` alternates occupied/null plots and never reaches this size on its own,
+    // so it cannot stand in here. Counts are derived from MAX_PLOTS/BACKGROUND_REPLAY, not
+    // hardcoded, so this keeps testing the real ceiling if either constant moves.
+    const p: Postcard = {
+      W: 1180,
+      H: 470,
+      plotCount: MAX_PLOTS,
+      plots: Array.from({ length: MAX_PLOTS }, () => ({
+        genome: randomGenome(rand),
+        age: 100,
+      })),
+      forest: Array.from({ length: BACKGROUND_REPLAY }, () => ({
+        genome: randomGenome(rand),
+        x: 200,
+      })),
+    };
+
+    const packed = packPostcard(p);
+    const bytes = base64UrlToBytes(packed);
+    expect(bytes).not.toBeNull();
+    // Pins the constant to the real encoder output: if either drifts out of sync, this fails.
+    expect(bytes!.length).toBe(POSTCARD_MAX_BYTES);
+
+    const r = readPostcard(packed);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.postcard.plotCount).toBe(MAX_PLOTS);
+    for (const [i, plot] of p.plots.entries()) {
+      const got = r.postcard.plots[i];
+      expect(got).not.toBeNull();
+      expect(serialize(got!.genome)).toBe(serialize(plot!.genome));
+    }
+    expect(r.postcard.forest).toHaveLength(BACKGROUND_REPLAY);
+    expect(r.postcard.forest.map((f) => serialize(f.genome))).toEqual(
+      p.forest.map((f) => serialize(f.genome)),
+    );
   });
 });

@@ -72,6 +72,27 @@ export const BACKGROUND_REPLAY = 60;
 const clamp = (v: number, lo: number, hi: number): number =>
   Math.min(hi, Math.max(lo, v));
 
+/**
+ * Where N plots sit in a world W wide.
+ *
+ * Exported because the VISIT needs to place the sender's plots in the sender's world, and
+ * `computeLayout` cannot answer that — it decides the count from the local viewport. A second
+ * copy of this arithmetic would put a visited garden's plants at subtly different positions
+ * than the garden it was made from, which is the one thing a photograph must not do.
+ */
+export function plotPositions(W: number, plots: number): number[] {
+  if (plots <= 0) return [];
+  // Inset scales with width instead of staying at 135. A fixed inset on a 396-wide world
+  // would eat two thirds of it, leaving the plots crushed into the middle.
+  const inset = Math.min(135, W * 0.14);
+  const usable = W - inset * 2;
+  if (plots === 1) return [W / 2];
+  return Array.from(
+    { length: plots },
+    (_, i) => inset + (i / (plots - 1)) * usable,
+  );
+}
+
 export function computeLayout(viewportW: number, viewportH: number): Layout {
   // Margins: a little breathing room horizontally, and a line for the HUD.
   const availW = Math.max(320, viewportW - 16);
@@ -80,8 +101,8 @@ export function computeLayout(viewportW: number, viewportH: number): Layout {
   const W = Math.round(clamp(availW, MIN_W, MAX_W));
   const H = Math.round(clamp(availH, MIN_H, MAX_H));
 
-  // Inset scales with width instead of staying at 135. A fixed inset on a 396-wide world
-  // would eat two thirds of it, leaving the plots crushed into the middle.
+  // The plot COUNT comes from the local viewport; where those plots go is `plotPositions`.
+  // Splitting the two is what lets a visit keep the second and reject the first.
   const inset = Math.min(135, W * 0.14);
   const usable = W - inset * 2;
   const plots = clamp(
@@ -90,15 +111,7 @@ export function computeLayout(viewportW: number, viewportH: number): Layout {
     MAX_PLOTS,
   );
 
-  const plotXs =
-    plots === 1
-      ? [W / 2]
-      : Array.from(
-          { length: plots },
-          (_, i) => inset + (i / (plots - 1)) * usable,
-        );
-
-  return { W, H, soil: H - SOIL_BAND, plotXs };
+  return { W, H, soil: H - SOIL_BAND, plotXs: plotPositions(W, plots) };
 }
 
 /** Whether two layouts differ in any way that requires re-growing the garden. */

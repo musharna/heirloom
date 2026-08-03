@@ -19,13 +19,14 @@ export default defineConfig(({ command, isPreview }) => ({
   build: {
     target: "es2022",
     rollupOptions: {
-      // Vite builds only the root index.html unless told otherwise. Without these two
-      // entries the deployed site would be a landing page linking to two 404s — and the
-      // build would succeed, which is the worst way for it to be wrong.
+      // Vite builds only the root index.html unless told otherwise. Without these entries
+      // the deployed site would be a landing page linking to 404s — and the build would
+      // succeed, which is the worst way for it to be wrong.
       input: {
         main: here("./index.html"),
         garden: here("./garden/index.html"),
         lookdev: here("./lookdev/index.html"),
+        visit: here("./visit/index.html"),
       },
     },
   },

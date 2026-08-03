@@ -76,16 +76,13 @@ import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
 import { paintThumb } from "../src/render/thumb";
-import { RECEDE_TICKS } from "../src/render/motion";
+import { RECEDE_TICKS, SPEED } from "../src/render/motion";
 import { placeRetired, type Placement } from "../src/render/forest";
 import { bedDepth, toCanvasSpace, toPlotSpace } from "../src/render/bed";
 import { mulberry32 } from "../src/rng";
 import { PALETTE, paintPlant } from "../src/render/stage";
 import { drawScene } from "../src/scene";
 import type { Plant, Vec2 } from "../src/types";
-
-/** Ticks per frame. Unhurried without being tedious. */
-const SPEED = 1.4;
 
 /**
  * World geometry, from the viewport. Reassignable rather than constant: a phone rotated to

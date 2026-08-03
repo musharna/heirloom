@@ -10,6 +10,7 @@ import {
   SOIL_BAND,
   computeLayout,
   layoutChanged,
+  plotPositions,
 } from "../src/game/layout";
 
 /** Real device viewports, not round numbers. */
@@ -131,6 +132,16 @@ describe("computeLayout", () => {
 
   it("is deterministic", () => {
     expect(computeLayout(800, 600)).toEqual(computeLayout(800, 600));
+  });
+
+  it("computeLayout places its plots where plotPositions says", () => {
+    // The visit places the SENDER's plots with `plotPositions` alone. If the two ever drift,
+    // a visited garden's plants stand somewhere other than they did in the garden the link
+    // was made from — a photograph that moved its subject.
+    for (const w of [360, 700, 1180]) {
+      const l = computeLayout(w + 16, 540);
+      expect(l.plotXs).toEqual(plotPositions(l.W, l.plotXs.length));
+    }
   });
 
   it("survives degenerate viewports without producing NaN", () => {

@@ -50,6 +50,36 @@ export const MAX_AGE = 0xffff;
 export const FROZEN_CLOCK = 100_000;
 
 /**
+ * Where a share link points: the visit page beside the garden page it was copied from.
+ *
+ * Was `location.pathname.replace(/garden\/$/, "visit/")`, inline at the click handler. Two
+ * things wrong with that, and they compound.
+ *
+ * It misses `…/garden/index.html`. GitHub Pages serves both forms, and a bookmark or a typed
+ * URL is as likely to be the second. And a `replace` that matches nothing returns its input, so
+ * the miss was SILENT: the fragment was appended to the garden path, neither `#g=` nor `#new`
+ * matches `#garden=`, and the recipient opened the link to their own garden with nothing
+ * anywhere saying so — the exact silent-wrong-garden failure this feature exists to avoid.
+ *
+ * So it THROWS rather than returning the input. A link that cannot be vouched for must not be
+ * handed to a player to send to a friend, and "unchanged" is indistinguishable from "correct"
+ * at the call site.
+ *
+ * `(^|\/)` anchors the match to a whole path segment: `/mygarden/` ends in `garden/` and is not
+ * the garden.
+ */
+const GARDEN_PAGE = /(^|\/)garden\/(index\.html)?$/;
+
+export function visitPath(pathname: string): string {
+  const m = GARDEN_PAGE.exec(pathname);
+  if (!m)
+    throw new Error(
+      `"${pathname}" is not a garden page — a share link can only be made from a path ending in garden/ or garden/index.html`,
+    );
+  return `${pathname.slice(0, m.index)}${m[1] ?? ""}visit/${m[2] ?? ""}`;
+}
+
+/**
  * Upper bound on a postcard's raw byte length, computed from the format's own parts rather than
  * a guessed literal. Checked immediately after the base64 decode, BEFORE `checksumOf` runs:
  * `checksumOf` builds a JS string one character at a time across the whole buffer, so without

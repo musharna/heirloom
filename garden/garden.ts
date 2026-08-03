@@ -36,7 +36,7 @@ import {
   layoutChanged,
   type Layout,
 } from "../src/game/layout";
-import { packPostcard } from "../src/game/postcard";
+import { packPostcard, visitPath } from "../src/game/postcard";
 import {
   REPLAY_CAP,
   SAVE_KEY,
@@ -1348,7 +1348,19 @@ const shareRow = `<button id="share-garden" type="button">copy a link to this ga
 /** Wire the share button after each `renderDrawer` innerHTML assignment re-creates it. */
 function wireShareButton(): void {
   drawerEl.querySelector("#share-garden")?.addEventListener("click", () => {
-    const url = `${location.origin}${location.pathname.replace(/garden\/$/, "visit/")}#garden=${gardenPostcard()}`;
+    // `visitPath` THROWS when it cannot rewrite the path, and that is the point. This used to
+    // be `location.pathname.replace(/garden\/$/, "visit/")` inline, which misses the
+    // `…/garden/index.html` form GitHub Pages also serves and returns its input unchanged when
+    // it does. The link then kept the garden path, `#garden=` matched nothing there, and the
+    // recipient opened it to their OWN garden with nothing anywhere saying so.
+    let url: string;
+    try {
+      url = `${location.origin}${visitPath(location.pathname)}#garden=${gardenPostcard()}`;
+    } catch (e) {
+      notice = `could not make a link to this garden — ${(e as Error).message}`;
+      announce(notice);
+      return;
+    }
     void navigator.clipboard
       .writeText(url)
       .then(() => {

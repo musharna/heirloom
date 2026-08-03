@@ -25,6 +25,7 @@ import {
   POSTCARD_VERSION,
   packPostcard,
   readPostcard,
+  visitPath,
   type Postcard,
 } from "../src/game/postcard";
 
@@ -379,5 +380,69 @@ describe("the world a garden code claims", () => {
 
   it("names the WIDTH when both are wrong — the first thing read is the first thing reported", () => {
     expect(errorFor(0xffff, 0xffff)).toContain("65535");
+  });
+});
+
+/**
+ * WHERE A SHARE LINK POINTS.
+ *
+ * The share button built its URL with `location.pathname.replace(/garden\/$/, "visit/")`, which
+ * silently does nothing off the trailing-slash form. GitHub Pages serves both `…/garden/` and
+ * `…/garden/index.html`, and a bookmark or a typed URL is as likely to be the second. On that
+ * path the regex missed, the fragment was appended to the GARDEN path, and neither `#g=` nor
+ * `#new` matches `#garden=` — so the recipient opened the link and saw THEIR OWN garden, with
+ * nothing anywhere saying so. That is the silent-wrong-garden failure this whole branch exists
+ * to prevent.
+ *
+ * A no-op `replace` is the shape of the bug, so the function REFUSES rather than returning its
+ * input: a link you cannot vouch for should not be handed to a player to send to a friend.
+ */
+describe("the path a share link points at", () => {
+  it("rewrites both forms the garden is served from", () => {
+    expect(visitPath("/garden/")).toBe("/visit/");
+    expect(visitPath("/garden/index.html")).toBe("/visit/index.html");
+    expect(visitPath("/heirloom/garden/")).toBe("/heirloom/visit/");
+    expect(visitPath("/heirloom/garden/index.html")).toBe(
+      "/heirloom/visit/index.html",
+    );
+    // The dev server and a bare file host both put the garden at the root.
+    expect(visitPath("garden/")).toBe("visit/");
+  });
+
+  it.each([
+    ["the site root", "/"],
+    ["the visit page itself", "/visit/"],
+    ["a path that only ENDS in the letters", "/mygarden/"],
+    ["a differently-named page", "/gardening/"],
+    ["a deeper file under the garden", "/garden/index.html/more"],
+    ["nothing at all", ""],
+  ])("refuses %s rather than returning it unchanged", (_label, path) => {
+    expect(() => visitPath(path)).toThrow();
+    // The message names the path, or the player is told a link failed and not which one.
+    try {
+      visitPath(path);
+    } catch (e) {
+      expect((e as Error).message).toContain(JSON.stringify(path).slice(1, -1));
+    }
+  });
+
+  it("CONTROL: never returns its input — a silent no-op is the bug", () => {
+    // The rule the original expression broke, stated as a rule. Any path it accepts must come
+    // back changed; any path it cannot change must throw. There is no third outcome.
+    for (const path of [
+      "/garden/",
+      "/garden/index.html",
+      "/heirloom/garden/",
+      "/",
+      "/mygarden/",
+    ]) {
+      let out: string | null = null;
+      try {
+        out = visitPath(path);
+      } catch {
+        continue;
+      }
+      expect(out).not.toBe(path);
+    }
   });
 });

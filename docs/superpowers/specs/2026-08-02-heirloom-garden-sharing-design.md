@@ -26,7 +26,7 @@ the sender has never seen, at which point it is no longer their garden. A fully 
 be the only motionless screen in a game built on motion (§23), and would read as broken.
 
 **The forest is capped at the depth that renders.** `BACKGROUND_REPLAY = 60`
-(`src/game/save.ts:47`) already governs how many retired plants are composited on load, because
+(`src/game/layout.ts:70`) already governs how many retired plants are composited on load, because
 past that depth a layer has washed out to under 5% contrast. Sharing all 200 of `REPLAY_CAP`
 would triple the link to transmit invisibility.
 
@@ -40,17 +40,34 @@ One version byte and one checksum for the whole payload, rather than the per-gen
 `serialize.ts` uses — at 60-plus genomes that overhead is 20% of the link. The `BitWriter` and
 `BitReader` in `src/genome/serialize.ts` are reused as-is.
 
-| Field                                     | Bytes                 |
-| ----------------------------------------- | --------------------- |
-| version                                   | 1                     |
-| world width                               | 2                     |
-| plot count + up to 9 x (8 genome + 2 age) | 91                    |
-| forest count + 60 x (8 genome + 2 x)      | 601                   |
-| checksum                                  | 1                     |
-| **total, base64url encoded**              | **696 -> ~928 chars** |
+| Field                                                 | Bytes                      |
+| ----------------------------------------------------- | -------------------------- |
+| version                                               | 1                          |
+| world width                                           | 2                          |
+| world height                                          | 2                          |
+| plot count                                            | 1                          |
+| occupied count                                        | 1                          |
+| up to `MAX_PLOTS` x (1 plot index + 8 genome + 2 age) | 99                         |
+| forest count                                          | 1                          |
+| up to `BACKGROUND_REPLAY` x (8 genome + 2 x)          | 600                        |
+| checksum                                              | 1                          |
+| **maximum total, base64url encoded**                  | **708 -> ~944 characters** |
 
-A plot with no occupant writes a zero genome and is skipped on read, so an empty bed costs the
-same as a full one and each plot record stays fixed-width.
+That ceiling is `POSTCARD_MAX_BYTES` in `src/game/postcard.ts`, computed from `MAX_PLOTS`,
+`BACKGROUND_REPLAY` and `PAYLOAD_BYTES` rather than written down as a literal, and pinned by a
+test that packs the largest legal garden and asserts the encoded length lands exactly on it. It
+is also a guard: the length is checked immediately after the base64 decode, **before** the
+checksum runs, because the checksum walks the whole buffer and a hostile multi-megabyte fragment
+should not get to pay for that.
+
+**Height travels with width.** `Layout` carries `H` and `soil`, and `H` is clamped to 430-470
+(`src/game/layout.ts:51-58`). Carrying only the width would let the visitor's height apply to the
+sender's bed, moving the soil line relative to the plants — a distorted photograph rather than a
+scaled one.
+
+**An empty plot is an absence, not a value.** Empty plots are not transmitted at all: the payload
+carries an occupied count and, for each occupied plot, an explicit plot index. A bare plot
+therefore costs nothing, and no bit pattern can be mistaken for one.
 
 ### The bed is not always nine plots, and that is what makes the visit a photograph
 
@@ -169,7 +186,15 @@ Negative controls, since every driver here carries them:
   silent overwrite is the failure the architecture exists to prevent.
 - a garbage `#garden=` names the failure and wipes nothing
 - clicking a bloom during a visit yields no seed
-- the same plant's growth stage is unchanged across two samples taken seconds apart
+- **the frozen visit's foliage area barely moves while the same garden, running live, grows.**
+  Two pages open on the same garden at the same age, sampled three seconds apart: the visit's
+  foliage area drifts by a fraction of a percent and its canopy top by 0px, while the live
+  garden's foliage more than doubles and its canopy visibly climbs. **The assertion is relative**
+  — frozen drift must be under a tenth of the live growth measured in the same run — so it does
+  not bake in a machine-specific threshold, and no number here has to be kept in sync by hand.
+  Two further controls sit beside it: the frozen
+  page drew a garden at all (an empty canvas cannot fail a "did not change" check), and the
+  frozen page is still **painting**, proving motion was not frozen along with growth.
 - **the visited bed matches the sender's actual genome codes**, not merely "the bed filled in" —
   which would pass just as well on a bed of random plants. A count cannot distinguish the right
   content from any content.
@@ -205,3 +230,41 @@ sharing rather than a hole to be quietly hoped over.
   browser, which is what makes the whole feature free to host.
 - Visiting a garden from inside the drawer of your own — a gallery of gardens is a different
   feature.
+
+## Corrected during implementation
+
+Building this found four things this document got wrong. They are corrected above; they are
+listed here as well, because a design document that quietly rewrites itself into having been
+right is worth less than one that records where it was wrong. In particular, two of the four
+were **checks that could not fail** — the most expensive kind of error, since they read as
+rigour right up until something breaks underneath them.
+
+1. **The byte table was wrong, and it was wrong in a way that mattered.** It listed a world
+   _width_ and no height, and a fixed-width per-plot record, totalling 696 bytes. The shipped
+   format carries width and height, an occupied count, and a plot index per occupied plot: 708
+   bytes, ~944 characters. Omitting the height would have applied the _visitor's_ clamped height
+   to the _sender's_ bed, sliding the soil line relative to the plants — the one distortion a
+   photograph must not have.
+
+2. **"A plot with no occupant writes a zero genome and is skipped on read" was a bug, stated as
+   a design.** It presumed a genome with every allele index at 0 is an impossible value that can
+   serve as a sentinel. It is not: the packing is dense and _every_ bit pattern is a legal
+   genome, which this document already says about the single-genome codec two sections earlier
+   and failed to apply to its own. That sentinel decodes to a perfectly ordinary white flower,
+   so an empty plot in the sender's bed would have appeared as a real plant in the visitor's —
+   silently, with the checksum passing. The occupied-count-plus-index layout removes the
+   sentinel rather than choosing a better one.
+
+3. **The frozen-growth control could not fail.** As written it compared "the same plant's growth
+   stage across two samples taken seconds apart" — but the hook the visit exposes returns
+   _genomes_, and a genome does not change with age. Every plant in the bed reports the same
+   string at one second and at one hour, whether the growth clock is pinned, running, or absent.
+   The comparison was true by construction and would have passed on a visit that grew normally,
+   on a visit that grew backwards, and on a visit whose clock had been deleted. The replacement
+   measures the thing the claim is actually about — rendered foliage area, against a live control
+   page — because growth is visible in pixels and invisible in genomes.
+
+4. **A stale file reference.** `BACKGROUND_REPLAY` was cited at `src/game/save.ts:47`. It had to
+   move to `src/game/layout.ts` during implementation: the visit's codec needs it, and reaching
+   it through `save.ts` would have put the save writer on the visit's import graph — making the
+   central claim of the Architecture section false in order to import one integer.

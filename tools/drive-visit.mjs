@@ -103,9 +103,13 @@ async function openVisit(page, hash) {
  *
  * This is the metric that separates GROWTH from MOTION, which counting changed pixels does not.
  * Sway translates and rotates foliage, leaving its area alone; growth adds foliage. Measured
- * over three seconds on this machine: a frozen visit moved its foliage area by 0.01-0.05% and
- * its canopy top by 0px, while the same garden running live moved them by 169-218% and ~100px.
- * Three orders of magnitude is not a threshold that needs tuning.
+ * over three seconds on this machine, across several runs: a frozen visit moved its foliage area
+ * by 0.01-0.11% and its canopy top by 0px, while the same garden running live moved them by
+ * 108-218% and 62-150px. The live figures vary widely between runs because the garden seeds its
+ * founders from the wall clock, which is exactly why the ASSERTION is relative — frozen drift
+ * under a tenth of the live growth measured in the SAME run — rather than a number from this
+ * comment. Three orders of magnitude is not a threshold that needs tuning; these numbers are a
+ * record of what was observed, not an input to anything.
  */
 const canopy = (page) =>
   page.evaluate(() => {

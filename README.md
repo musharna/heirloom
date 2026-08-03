@@ -24,9 +24,9 @@ npm run dev     # http://localhost:5173/
 Deployed to GitHub Pages from `.github/workflows/pages.yml`, gated on typecheck and tests — a
 green deploy of a broken bundle looks fine in the Actions log and is broken in a browser.
 
-`/garden/` is the game. `/lookdev/` is a diagnostic sheet that varies one gene per panel against
-a shared seed — useful for judging a single trait, useless for judging the game, since it draws
-the same plant eighteen times.
+`/garden/` is the game. `/visit/` is the read-only view a `#garden=` link opens. `/lookdev/` is a
+diagnostic sheet that varies one gene per panel against a shared seed — useful for judging a
+single trait, useless for judging the game, since it draws the same plant eighteen times.
 
 ## The genetics
 
@@ -100,6 +100,28 @@ five-petalled, viable — so it grows the same flower it always did.
 Growth is seeded from a hash of the genome alone, so that link grows the same plant for everyone.
 The checksum matters because the packing is dense — every bit pattern is a legal genome, so
 without it a mistyped link would silently hand back the wrong flower instead of an error.
+
+### Sharing the whole garden
+
+A second kind of link sends the bed and the forest behind it, not one flower. **Copy a link to
+this garden** sits at the head of the drawer, and `#garden=` opens a **visit**: someone else's
+garden as it stood the moment they shared it, at the plot count and world size it had on their
+screen rather than reflowed to yours — a photograph letterboxes, it does not rearrange the
+subject.
+
+    https://musharna.github.io/heirloom/visit/#garden=<code>
+
+Growth is frozen and motion is not: a half-grown plant stays half-grown, and the bed still sways.
+A live visit would drift away from the garden it was sent from — you would watch a bloom open
+that the sender has never seen — and a still one would be the only motionless screen in the game.
+
+A visit **never writes to your own garden**, and that is a property of the module graph rather
+than a flag: the visit is a separate page that does not import the four verbs, the save writer,
+or the pollinators. A guard can be forgotten in one of six places; a function that is not on the
+graph cannot be called at all. There is a test that walks the import graph and says so.
+
+The tray and the notebook do not travel — a visitor cannot plant, and the notebook holds
+deductions the player worked out rather than a garden they grew.
 
 ## The drawer
 
@@ -195,14 +217,17 @@ driver that runs the real thing in a real browser:
 
 ```sh
 npm run dev &     # the drivers drive a real server
-npm run drive     # all eight, in order
+npm run drive     # every one of them, in order
 ```
 
-Seven of them run in CI against a production build, and the deploy waits for them — typecheck,
+They run in CI against a production build, and the deploy waits for them — typecheck,
 unit tests and a successful build all pass on a game that renders nothing and responds to no
 click, so before this a render regression shipped green. Every `drive-*.mjs` is picked up by a
 glob rather than named in a list, because the list is what went wrong: `drive-drawer.mjs` was
-written after the workflow and shipped ungated, and nothing compared the two.
+written after the workflow and shipped ungated, and nothing compared the two. `npm run drive`
+now derives its list from the same directory, so CI and the local run cannot disagree about what
+a driver is — and the runner is called `run-drivers.mjs` rather than `drive-all.mjs` precisely so
+it does not match that glob itself and get run alongside the drivers it spawns.
 
 - `tools/drive-verbs.mjs` — clicks real flowers, asserts the four verbs fire
 - `tools/drive-forest.mjs` — retires plants, reads the background buffer's pixels back
@@ -214,6 +239,9 @@ written after the workflow and shipped ungated, and nothing compared the two.
   plants, and asserts an ungrown plant is never named
 - `tools/drive-pollinator.mjs` — forces a carrier, crosses its pollen in by mouse and by
   keyboard, and asserts an ignored one leaves a seed only when it pollinated
+- `tools/drive-visit.mjs` — two browser contexts, a sender and a visitor who already has a
+  different garden of their own; asserts the visited bed is the sender's plant for plant, that
+  the visitor's save is byte-identical afterwards, and that growth is frozen while motion is not
 - `tools/check-motion.mjs` — asserts the scene moves, the geometry does not, and it runs at 60fps
 - `tools/check-phone.mjs` — mobile viewport under CPU throttling, with measured floors
 - `npm run soak` — plays hundreds of rounds; watches save size, heap and frame rate

@@ -27,7 +27,7 @@ Fix the mechanism before adding to it.
 
 **Files:**
 
-- Create: `tools/drive-all.mjs`
+- Create: `tools/run-drivers.mjs`
 - Modify: `package.json:16` (the `drive` script)
 
 **Interfaces:**
@@ -37,7 +37,12 @@ Fix the mechanism before adding to it.
 
 - [ ] **Step 1: Write the runner**
 
-Create `tools/drive-all.mjs`:
+Create `tools/run-drivers.mjs`. **The name is load-bearing and is not `drive-all.mjs`** — see
+the correction at the end of this plan: a runner named `drive-*.mjs` matches the very glob CI
+uses to find drivers, so CI would have run the runner _and_ each driver it spawns, doubling the
+whole suite silently. Naming it outside the prefix makes the collision impossible rather than
+something to remember to guard, and it removes the need for the runner to filter itself out of
+its own listing.
 
 ```js
 /**
@@ -49,6 +54,11 @@ Create `tools/drive-all.mjs`:
  * two lists sat side by side with nothing comparing them. Deriving both from the same source —
  * the directory — is what makes them unable to disagree.
  *
+ * This file is deliberately named OUTSIDE the `drive-*` prefix: CI's glob and the filter below
+ * both match `tools/drive-*.mjs`. If this runner matched its own pattern, CI would execute it
+ * AND every driver it spawns individually — double-running the whole suite, silently, because
+ * both passes succeed.
+ *
  * The `check-*` tools are deliberately NOT run here: they are judged one at a time and some are
  * performance measurements that are meaningless on a shared runner.
  */
@@ -59,10 +69,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const drivers = readdirSync(here)
-  .filter(
-    (f) =>
-      f.startsWith("drive-") && f.endsWith(".mjs") && f !== "drive-all.mjs",
-  )
+  .filter((f) => f.startsWith("drive-") && f.endsWith(".mjs"))
   .sort();
 
 // A glob that matches nothing is an empty gate reporting success. Same floor CI uses.
@@ -89,7 +96,7 @@ console.log("all drivers passed");
 Temporarily change the floor to `< 99` and run it:
 
 ```bash
-~/miniconda3/envs/heirloom/bin/node tools/drive-all.mjs
+~/miniconda3/envs/heirloom/bin/node tools/run-drivers.mjs
 ```
 
 Expected: exits non-zero with `only 7 drivers found`. Then change the floor back to `< 7`. This is the only assertion in the file, and a floor nobody has watched fail is not a floor.
@@ -99,7 +106,7 @@ Expected: exits non-zero with `only 7 drivers found`. Then change the floor back
 In `package.json`, replace the `drive` script value with:
 
 ```json
-"drive": "node tools/drive-all.mjs && node tools/check-motion.mjs && node tools/check-viewports.mjs && node tools/check-phone.mjs"
+"drive": "node tools/run-drivers.mjs && node tools/check-motion.mjs && node tools/check-viewports.mjs && node tools/check-phone.mjs"
 ```
 
 - [ ] **Step 4: Run the full driver suite against a production bundle**
@@ -117,7 +124,7 @@ Kill preview with `pkill -f "vite.*4173"` — **not** `pkill -f "vite preview"`,
 - [ ] **Step 5: Commit**
 
 ```bash
-git add tools/drive-all.mjs package.json
+git add tools/run-drivers.mjs package.json
 git commit -m "build: derive the driver list rather than maintaining a second copy"
 ```
 
@@ -293,7 +300,7 @@ git commit -m "refactor(genome): one definition of the bit layout, shared with t
 
 **Interfaces:**
 
-- Consumes: `BitWriter`, `BitReader`, `writeGenomeBits`, `readGenomeBits`, `checksumOf`, `bytesToBase64Url`, `base64UrlToBytes`, `PAYLOAD_BYTES` from Task 2. `MAX_PLOTS` from `src/game/layout.ts`. `BACKGROUND_REPLAY` from `src/game/save.ts`.
+- Consumes: `BitWriter`, `BitReader`, `writeGenomeBits`, `readGenomeBits`, `checksumOf`, `bytesToBase64Url`, `base64UrlToBytes`, `PAYLOAD_BYTES` from Task 2. `MAX_PLOTS` **and `BACKGROUND_REPLAY`** from `src/game/layout.ts`. `BACKGROUND_REPLAY` has to move there first — see the correction at the end of this plan: importing it from `src/game/save.ts` would put the save writer on the visit's import graph, one hop through `postcard.ts`, and make the Architecture section's central claim false in exchange for one integer.
 - Produces:
   - `const POSTCARD_VERSION = 1`
   - `type PostcardPlot = { genome: Genome; age: number }`
@@ -479,8 +486,10 @@ import {
   readGenomeBits,
   writeGenomeBits,
 } from "../genome/serialize";
-import { MAX_PLOTS } from "./layout";
-import { BACKGROUND_REPLAY } from "./save";
+// BACKGROUND_REPLAY comes from ./layout, NOT ./save. layout.ts is pure and canvas-free; save.ts
+// is the writer this whole feature exists to stay off. `visit -> postcard -> save` is exactly
+// the edge the architecture forbids, and an integer is not worth it.
+import { BACKGROUND_REPLAY, MAX_PLOTS } from "./layout";
 
 /**
  * A whole garden, packed for a URL fragment.
@@ -626,7 +635,22 @@ export function readPostcard(s: string): PostcardResult {
     const index = bytes[at++]!;
     const genome = readGenome();
     const age = read16();
-    if (index < plotCount) plots[index] = { genome, age };
+    // Both must fail loud: plotCount is carried INSIDE this same postcard, so an index beyond
+    // it, or a repeat of one already seen, is internally inconsistent — not version skew that
+    // deserves silent tolerance. `if (index < plotCount)` would DROP the first and let the
+    // second silently overwrite, in a decoder whose own plan says "never substitute a default
+    // for bad input".
+    if (index >= plotCount)
+      return {
+        ok: false,
+        error: `plot ${index} is outside a ${plotCount}-plot bed`,
+      };
+    if (plots[index] !== null)
+      return {
+        ok: false,
+        error: `plot ${index} appears twice in this garden`,
+      };
+    plots[index] = { genome, age };
   }
 
   bad = need(1, "forest");
@@ -724,10 +748,15 @@ export function drawScene(s: Scene): HTMLCanvasElement | null;
 ~/miniconda3/envs/heirloom/bin/npm run preview &
 sleep 3
 GARDEN_URL=http://localhost:4173/heirloom/garden/ ~/miniconda3/envs/heirloom/bin/npm run drive 2>&1 | tail -5
-~/miniconda3/envs/heirloom/bin/node tools/measure-depth.mjs > /tmp/depth-before.txt
+git rev-parse HEAD   # the pre-move tree, for the character-identity check in Step 4
 ```
 
 Record that all drivers pass BEFORE touching anything. An extraction whose baseline was never captured cannot be shown to have preserved behaviour.
+
+**Do not snapshot `measure-depth.mjs` here** — the earlier draft of this plan did, and that
+baseline was worthless. See the correction at the end of this plan: the garden seeds its RNG from
+the wall clock, so two runs of that tool on an unchanged build disagree by as much as any real
+change would.
 
 - [ ] **Step 2: Create `src/scene.ts`**
 
@@ -764,11 +793,24 @@ stageCache = drawScene({
 ~/miniconda3/envs/heirloom/bin/npm run preview &
 sleep 3
 GARDEN_URL=http://localhost:4173/heirloom/garden/ ~/miniconda3/envs/heirloom/bin/npm run drive
-~/miniconda3/envs/heirloom/bin/node tools/measure-depth.mjs > /tmp/depth-after.txt
-diff /tmp/depth-before.txt /tmp/depth-after.txt
 ```
 
-Expected: all drivers pass, `tsc` clean, and the depth measurement is identical. A visual extraction that only proves "it still runs" has proved nothing — `measure-depth.mjs` is the instrument that can see a changed paint order.
+Expected: all drivers pass and `tsc` is clean.
+
+Then prove the extraction was an extraction, by comparing the **code** rather than a picture of
+it. Diff each moved region against its pre-move text and confirm every surviving difference is
+the one substitution this task declares — `s.` in front of what used to be a module-level
+binding, and `s.now` / `s.motionNow` where the single `now` used to be:
+
+```bash
+git show <baseline-sha>:garden/garden.ts > /tmp/garden-before.ts
+# for each moved region: extract it from both files and diff, expecting ONLY the s. prefixes
+```
+
+A statement about the code is checkable; a statement about a rendered frame is not, because the
+frame is not a function of the code alone. **The `measure-depth` diff this plan originally
+prescribed here has been struck** — it cannot fail _or_ pass meaningfully. See the correction at
+the end of this plan.
 
 - [ ] **Step 5: Commit**
 
@@ -858,10 +900,13 @@ Create `visit/index.html`, copying the `<canvas id="c">`, the `#say` live region
   <span id="strip-text">you're visiting a shared garden</span>
   <a id="strip-back" href="../garden/">return to your own garden</a>
 </div>
-<canvas id="c"></canvas>
-<p id="say" aria-live="polite" class="sr-only"></p>
+<div id="wrap"><canvas id="c" aria-hidden="true"></canvas></div>
 <ul id="mirror" class="sr-only" aria-label="this garden"></ul>
+<p id="say" aria-live="polite" class="sr-only"></p>
 ```
+
+The canvas is wrapped so a failed visit can hide the whole thing with one `hidden` attribute
+without disturbing the inline width/height `fit()` writes onto the canvas.
 
 The mirror is a `<ul>` of `<li>`, **not** buttons — there is nothing to activate in a read-only garden, and a button that does nothing is worse than no button.
 
@@ -880,12 +925,19 @@ Create `visit/visit.ts`:
  */
 import { grow, isGrown, type Planting } from "../src/game/garden";
 import { readPostcard, type Postcard } from "../src/game/postcard";
-import { computeLayout, plotPositions } from "../src/game/layout";
+import { computeLayout, plotPositions, SOIL_BAND } from "../src/game/layout";
 import { serialize as serializeGenome } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
 import { genomeSeed } from "../src/genome/serialize";
 import { drawScene } from "../src/scene";
+// SPEED has to MOVE to src/render/motion.ts as part of this task. It currently lives in
+// garden/garden.ts, which the visit must never import, and both entries need the same tick rate:
+// a hardcoded 1.4 here is the two-copies-of-one-rule bug this plan's Global Constraints forbid.
+import { SPEED } from "../src/render/motion";
 
+// The canvas lives inside `#wrap` so `fail()` has something to hide — hiding the canvas itself
+// would fight the sizing rules `fit()` writes onto its style attribute.
+const wrap = document.getElementById("wrap")!;
 const canvas = document.getElementById("c") as HTMLCanvasElement;
 const ctx = canvas.getContext("2d")!;
 const stripText = document.getElementById("strip-text")!;
@@ -896,14 +948,26 @@ let failure: string | null = null;
 
 function fail(message: string): void {
   // §10: name what went wrong. An empty garden rendered silently would read as the sender
-  // having nothing to show, which is a lie about someone else's afternoon.
+  // having nothing to show, which is a lie about someone else's afternoon — so the canvas is
+  // REMOVED from the page as well as left unpainted, and the render loop below never starts.
+  // A bed of bare plots IS a legitimate garden, so painting one on failure is precisely the
+  // confusion this message exists to prevent.
   failure = message;
   stripText.textContent = `that garden link could not be opened — ${message}`;
   document.getElementById("strip-back")!.textContent = "start your own garden";
+  wrap.hidden = true;
   say.textContent = stripText.textContent;
 }
 
-const code = /[#&]garden=([A-Za-z0-9_-]+)/.exec(location.hash);
+/**
+ * The code is taken up to the next `&` and handed to the codec UNVALIDATED.
+ *
+ * Deliberately NOT `([A-Za-z0-9_-]+)`: that pattern stops at the first illegal character and
+ * passes the TRUNCATED prefix on, so a link with one mistyped byte in the middle is reported as
+ * a checksum failure instead of as the illegal character it actually is. What counts as a legal
+ * code is `readPostcard`'s to decide, and it already says so precisely.
+ */
+const code = /[#&]garden=([^&]*)/.exec(location.hash);
 const result = code ? readPostcard(code[1]!) : null;
 if (!code) fail("there is no garden in this link");
 else if (result && !result.ok) fail(result.error);
@@ -919,7 +983,9 @@ const postcard: Postcard | null = result?.ok ? result.postcard : null;
  */
 const W = postcard?.W ?? 1180;
 const H = postcard?.H ?? 470;
-const SOIL = H - 80;
+// SOIL_BAND, not a literal 80: computeLayout derives `soil` as `H - SOIL_BAND`, and a second
+// copy of that number would drift the visited soil line away from the sender's.
+const SOIL = H - SOIL_BAND;
 const dpr = Math.min(2, window.devicePixelRatio || 1);
 
 function fit(): void {
@@ -931,9 +997,6 @@ function fit(): void {
   canvas.style.height = `${Math.round(H * scale)}px`;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
-fit();
-window.addEventListener("resize", fit);
-
 const forest = new Forest(W, H, dpr);
 for (const entry of postcard?.forest ?? [])
   forest.retire(
@@ -958,7 +1021,9 @@ let stageCache: HTMLCanvasElement | null = null;
 let motionNow = 0;
 
 function frame(): void {
-  motionNow += 1.4; // SPEED, matching the garden's tick rate.
+  // Growth is frozen; MOTION is not. `now` never moves, `motionNow` does — the two-clock
+  // signature on `drawScene` exists for exactly this.
+  motionNow += SPEED;
   stageCache = drawScene({
     ctx,
     W,
@@ -974,7 +1039,15 @@ function frame(): void {
   });
   requestAnimationFrame(frame);
 }
-requestAnimationFrame(frame);
+
+// The loop only starts if there is a garden to draw. `fail()` sets `failure` and hides the
+// canvas; starting the loop anyway would paint a bare bed underneath the error message, which
+// is the failure the Failure section of the spec forbids in so many words.
+if (!failure) {
+  fit();
+  window.addEventListener("resize", fit);
+  requestAnimationFrame(frame);
+}
 
 // A blind visitor hears the bed they are visiting. A list, not buttons: there is nothing to
 // activate. Gated on isGrown for the same reason the garden's mirror is — an ungrown plant does
@@ -1100,12 +1173,19 @@ drawerEl.querySelector("#share-garden")?.addEventListener("click", () => {
     .then(() => {
       notice = "link copied — it opens this garden for anyone who follows it";
       announce(notice);
+      setTimeout(() => {
+        notice = "";
+      }, 3200);
     })
-    .catch(() => {
-      // Clipboard access is permission-gated and fails in plenty of contexts. Showing the URL
-      // is the same fallback the bloom card already uses (garden/garden.ts:1842).
-      codeEl.textContent = url;
-      notice = "copy this link to share your garden";
+    .catch((e: Error) => {
+      // Clipboard access is permission-gated and fails in plenty of contexts. Fold the URL into
+      // the NOTICE, and name the reason it failed.
+      //
+      // NOT `codeEl.textContent = url`, which an earlier draft of this plan prescribed: `codeEl`
+      // belongs to the tray's own share writer, which rewrites it whenever the newest seed
+      // changes (garden/garden.ts:1755). The garden link would be stomped — exactly when the
+      // clipboard was unavailable and this fallback was the only way to get the link at all.
+      notice = `could not copy (${e.message}) — ${url}`;
       announce(notice);
     });
 });
@@ -1247,12 +1327,34 @@ check(
 // ── FROZEN GROWTH ────────────────────────────────────────────────────────────────────────────
 await b.goto(`${VISIT}#garden=${code}`, { waitUntil: "networkidle" });
 await b.waitForFunction(() => window.__visitReady === true, { timeout: 15000 });
-const t0 = await b.evaluate(() => window.__visitPlots());
+// NOT `__visitPlots()` twice: that hook returns GENOMES, which do not change with age, so the
+// comparison is true whatever the clock does. See the correction at the end of this plan.
+// Growth is visible in PIXELS, so measure foliage area — sway translates and rotates foliage and
+// leaves its area alone, while growth adds foliage — against a LIVE page as the control.
+const frozenBefore = await canopy(p);
+const livingBefore = await canopy(a);
 await b.waitForTimeout(3000);
-const t1 = await b.evaluate(() => window.__visitPlots());
+const livingAfter = await canopy(a);
+const frozenAfter = await canopy(p);
+
+const living = grewBy(livingBefore, livingAfter);
+const frozen = grewBy(frozenBefore, frozenAfter);
 check(
-  "CONTROL: growth does not advance during a visit",
-  JSON.stringify(t0) === JSON.stringify(t1),
+  "CONTROL: the frozen visit drew a garden at all — an empty canvas cannot fail this",
+  frozenBefore.area > 1000,
+  `${frozenBefore.area} foliage pixels`,
+);
+check("CONTROL: the LIVE garden grew over the same window", living > 0.2);
+check(
+  "CONTROL: and the frozen visit is still PAINTING — motion is not frozen too",
+  (await changedSince(p)) > 0,
+);
+check(
+  "growth does not advance during a visit",
+  // Relative to the growth measured in the SAME run, not an absolute threshold: a fixed number
+  // would be a machine-specific constant pretending to be a property of the feature.
+  Math.abs(frozen) < living / 10,
+  `frozen ${(frozen * 100).toFixed(2)}% vs living ${(living * 100).toFixed(1)}%`,
 );
 
 // ── FAILURE IS NAMED ─────────────────────────────────────────────────────────────────────────
@@ -1304,13 +1406,37 @@ Rebuild and re-run. Expected: **FAIL** on `the visitor's own save is byte-identi
 
 This is mandatory, not optional. Three controls in this codebase in the last two days passed while testing nothing.
 
-- [ ] **Step 4: Confirm the module graph claim**
+- [ ] **Step 4: Confirm the module graph claim — with a graph walk, not a grep**
 
-```bash
-grep -n "save\|pollinator\|insects" visit/visit.ts
-```
+The grep this step originally prescribed —
+`grep -n "save\|pollinator\|insects" visit/visit.ts` — **is struck.** It could not
+discriminate in either direction, and it was demonstrated printing nothing while the graph was
+genuinely compromised. See the correction at the end of this plan.
 
-Expected: no import of `src/game/save`, `src/game/pollinator`, or `garden/insects`. If `readPostcard` pulled `BACKGROUND_REPLAY` from `save.ts` into the visit bundle, move that constant to `src/game/layout.ts` — the architecture's claim is about the graph, and a constant is not worth weakening it for.
+Create `test/visit-isolation.test.ts` instead. It walks the **transitive** relative-import
+closure from each entry, using `import.meta.glob(..., { query: "?raw" })` for the sources, and:
+
+- asserts `visit/visit.ts` reaches none of `src/game/save.ts`, `garden/garden.ts`,
+  `src/game/pollinator.ts`, `garden/insects.ts`;
+- names the **path through the graph** on failure
+  (`visit/visit.ts -> src/game/postcard.ts -> src/game/save.ts`), so the output identifies the
+  import to delete rather than leaving the reader to find it;
+- asserts the inverse mistake too: the pure model `src/game/garden.ts` — a different file from
+  the controller `garden/garden.ts` by one path segment — **is** on the visit's graph, since a
+  visit has to grow the plants it was sent;
+- carries a **positive control**: `garden/garden.ts` genuinely does reach three of the four
+  forbidden modules, each across a real edge (path length ≥ 2), so a walker that read nothing
+  fails here loudly rather than passing above silently. `garden/garden.ts` itself is excluded
+  from that control, because the walker seeds its result with the entry before following any
+  edge — "the control reaches its own entry" is true of a walker that reads no files at all;
+- has its extractor unit-tested against every import form in the repo, multi-line included. The
+  first walker matched whole `import … from "…"` statements on one line, which is not the shape
+  of a single import in `garden/garden.ts`, so it reported a perfect clean while reading almost
+  nothing.
+
+If `readPostcard` pulls `BACKGROUND_REPLAY` from `save.ts` into the visit bundle, this test names
+that exact edge. Moving the constant to `src/game/layout.ts` (Task 3) is the fix — the
+architecture's claim is about the graph, and an integer is not worth weakening it for.
 
 - [ ] **Step 5: Full suite**
 
@@ -1361,6 +1487,87 @@ gh pr create --draft --title "feat: sharing a whole garden" --body "..."
 ```
 
 The PR title must describe what the branch actually contains. `gh pr merge --squash` inherits it, and a title written before the implementation has now shipped the wrong squash commit twice in this project (#7, #11).
+
+---
+
+## Corrected during implementation
+
+Seven defects in this plan were found by building it. They are fixed in the tasks above and
+listed here, because a plan that silently rewrites itself into having been right teaches nothing,
+and the ones worth remembering are the **checks that could not fail** — four of the seven. Those
+are more dangerous than a wrong line of code, because a wrong line fails and a dead check
+reports success forever.
+
+1. **The runner was named `tools/drive-all.mjs`, which matches CI's own driver glob.** CI finds
+   drivers with `tools/drive-*.mjs`, and Task 1's whole purpose is to stop maintaining a second
+   list — so the runner it creates would have been picked up as a driver. CI would have run the
+   runner _and_ each of the seven drivers individually: every driver executed twice, silently,
+   because both passes succeed and nothing in the log distinguishes them. It ships as
+   `tools/run-drivers.mjs`. The self-filter (`f !== "drive-all.mjs"`) the original needed is gone
+   with it — a name outside the prefix makes the collision impossible rather than guarded.
+
+2. **Task 3 imported `BACKGROUND_REPLAY` from `./save`.** `postcard.ts` is on the visit's import
+   graph, so that single import would have put `src/game/save.ts` — the save writer — one hop
+   from `visit/visit.ts`, making the Architecture section's central claim false. Read-only "is a
+   property of the module graph" is either true of the whole graph or it is not a property at
+   all. `BACKGROUND_REPLAY` moved to `src/game/layout.ts`, which is pure and canvas-free.
+
+3. **The decoder silently dropped bad plot indices.** `if (index < plotCount) plots[index] = …`
+   discards an out-of-range index without a word, and lets a repeated index overwrite the plot it
+   already filled. Both are internally inconsistent — `plotCount` is carried inside the same
+   postcard — and both contradict this plan's own Global Constraints ("never substitute a default
+   for bad input") and the project's §10. Two named errors now.
+
+4. **Task 4's verification could not fail — or pass.** It prescribed diffing `measure-depth`
+   output before and after the extraction and expecting them identical. But the garden seeds its
+   RNG from the wall clock (`garden/garden.ts:143`, `mulberry32(Date.now() & 0x7fffffff)`), so
+   every page load grows _different_ founders — which appear in the bed and, once retired, in the
+   background that tool samples. Run twice on an **unchanged** build, it disagrees with itself by
+   the same magnitude as any real regression would produce. It is not a weak check; it is noise
+   with a threshold drawn on it, and it would have been read either as a false alarm or as
+   permission. What shipped instead is a statement about the _code_: the moved regions were shown
+   character-identical to their pre-move text under only the declared substitution. Worth noting
+   in passing — a `__seed(n)` test hook would make visual measurement genuinely possible here.
+   None exists yet, and adding one was out of scope for this branch.
+
+5. **Task 5's draft module had four defects.** It hardcoded `H - 80` instead of importing
+   `SOIL_BAND`; it hardcoded `1.4` instead of `SPEED`, which had to move to `src/render/motion.ts`
+   so both entries could reach one definition (it lived in `garden/garden.ts`, which the visit
+   must not import); its `fail()` set an error message but did **not** stop the render loop, so a
+   bad link painted an **empty bed** under the error — the exact confusion the spec's Failure
+   section forbids, since a bare bed is a legitimate garden; and its URL regex
+   `([A-Za-z0-9_-]+)` stops at the first illegal character and hands the **truncated** prefix to
+   the codec, so a mistyped link was reported as a checksum failure rather than as the illegal
+   character it was. Two of these — the constants — are the same duplicate-definition mechanism
+   the Global Constraints name, reintroduced by the plan that names them.
+
+6. **Task 6's clipboard fallback wrote to a node it does not own.** `codeEl` is the tray's share
+   writer's element, rewritten whenever the newest seed changes (`garden/garden.ts:1755`), so the
+   garden URL would have been stomped — precisely when the clipboard was unavailable and the
+   fallback was the only way to get the link. The URL goes into the notice instead, with the
+   clipboard's own error message beside it.
+
+7. **Task 7's Step 4 was a dead check, and it was demonstrated dead.** A grep of `visit/visit.ts`
+   for `save|pollinator|insects` cannot discriminate in either direction. It **false-positives on
+   prose**: the doc comment that explains the read-only rule contains all three words, so the
+   grep fired on an untouched file and the "fix" was to reword a comment — the check was
+   measuring English. It **false-negatives on the actual risk**, which is not a direct import
+   (nobody writes that by accident) but a module reached transitively, one or two hops down,
+   where a grep of one file sees nothing. It was observed printing **nothing** while the graph
+   was genuinely compromised. Replaced by `test/visit-isolation.test.ts`, which walks the
+   transitive graph, names the path on failure, and carries a positive control proving the walker
+   can see the forbidden modules when they really are there.
+
+Two further notes, for the record rather than as defects in the prescribed steps:
+
+- **The same dead control appeared twice.** Task 7's driver compared `__visitPlots()` at two
+  moments to prove growth was frozen, and the spec's Testing section listed the same comparison in
+  prose. That hook returns _genomes_, which do not change with age, so it was true whatever the
+  clock did — it would have passed on a visit that grew normally, one that grew backwards, and one
+  with no clock at all. Corrected in both places, since a retraction that reaches only one of the
+  two sites leaves the wrong version still authoritative somewhere.
+- **Task 8's scope was larger than it was written.** It anticipated two spec corrections. Seven
+  defects were found, across both documents.
 
 ---
 

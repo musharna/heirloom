@@ -7,8 +7,9 @@
  * exists to earn, and a single-context test cannot make it: there would be one save, shared,
  * and nothing for the visit to leave alone.
  *
- * The visitor's save is read with `context.storageState()`, NOT by loading a page and calling
- * `localStorage.getItem`. Two reasons, both of which would produce a false reading:
+ * The visitor's storage — every key, not only the save — is read with `context.storageState()`,
+ * NOT by loading a page and calling `localStorage.getItem`. Two reasons, both of which would
+ * produce a false reading:
  *
  *   - The garden flushes a pending save on `pagehide` and writes the CURRENT tick, so the bytes
  *     keep moving while the garden page is alive. A baseline sampled from the live game is
@@ -39,13 +40,41 @@ function check(label, ok, detail = "") {
 const errors = [];
 const watch = (page) => page.on("pageerror", (e) => errors.push(e.message));
 
-/** The visitor's save, read from the browser profile with no page executing. */
-async function savedGarden(context) {
+/**
+ * The visitor's ENTIRE localStorage, read from the browser profile with no page executing.
+ *
+ * Every key, not just `heirloom.garden.v1`. Watching one key answers a narrower question than
+ * the one the architecture makes: a visit that wrote `heirloom.garden.v2`, or a flag, or a
+ * draft of somebody else's garden under a new name, would have passed a single-key check
+ * untouched. What is being claimed is that a visit writes NOTHING.
+ *
+ * Sorted, so the comparison is of content rather than of whatever order the profile hands them
+ * back in.
+ */
+async function storageOf(context) {
   const state = await context.storageState();
+  const entries = [];
   for (const origin of state.origins ?? [])
     for (const entry of origin.localStorage ?? [])
-      if (entry.name === SAVE_KEY) return entry.value;
-  return null;
+      entries.push([`${origin.origin} ${entry.name}`, entry.value]);
+  return entries.sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0));
+}
+const gardenSaveIn = (entries) =>
+  entries.find(([key]) => key.endsWith(` ${SAVE_KEY}`))?.[1] ?? null;
+
+/** What moved, by key — "it changed" without naming the key is most of a wasted failure. */
+function storageDelta(before, after) {
+  const was = new Map(before);
+  const now = new Map(after);
+  const notes = [];
+  for (const [key, value] of now)
+    if (!was.has(key)) notes.push(`ADDED ${key} (${value.length} bytes)`);
+    else if (was.get(key) !== value)
+      notes.push(
+        `CHANGED ${key} (${was.get(key).length} -> ${value.length} bytes)`,
+      );
+  for (const key of was.keys()) if (!now.has(key)) notes.push(`REMOVED ${key}`);
+  return notes.join("; ");
 }
 
 /**
@@ -199,11 +228,12 @@ const ownPlotCount = await b.evaluate(() => window.__plotCount());
 
 // Tear the garden down BEFORE reading the baseline, so the pagehide flush is already in it.
 await b.goto("about:blank");
-const ownBefore = await savedGarden(visitor);
+const storageBefore = await storageOf(visitor);
+const ownSave = gardenSaveIn(storageBefore);
 check(
   "CONTROL: the visitor has a garden of their own",
-  Boolean(ownBefore),
-  `${ownBefore?.length ?? 0} saved bytes`,
+  Boolean(ownSave),
+  `${ownSave?.length ?? 0} saved bytes, across ${storageBefore.length} localStorage key(s)`,
 );
 // If the two gardens happened to be identical, "unchanged" would be unfalsifiable.
 check(
@@ -241,14 +271,24 @@ check(
   shown.length === senderPlotCount && shown.length !== ownPlotCount,
   `${shown.length} shown, sender ${senderPlotCount}, visitor ${ownPlotCount}`,
 );
-// A blind visitor gets the same bed as a list.
+// A blind visitor gets the same bed as a list — and it has to be the SAME bed, plot by plot.
+// Counting entries and checking they are non-empty passes on nine identical wrong strings.
+//
+// Occupancy and position only. `plotLabel` gates trait names on isGrown so an unfinished plant
+// discloses nothing (§4), and asserting traits here would be pressure to open that gate.
 const spoken = await b.evaluate(() =>
   [...document.querySelectorAll("#mirror li")].map((li) => li.textContent),
 );
+const isEmptyLabel = (text) => /,\s*empty$/.test(text ?? "");
+const spokenEmpty = spoken.filter(isEmptyLabel).length;
+const shownOccupied = shown.filter(Boolean).length;
 check(
-  "the mirror describes the same bed",
-  spoken.length === shown.length && spoken.every(Boolean),
-  `${spoken.length} entries`,
+  "the mirror describes the same bed — the same plots occupied, in the same places",
+  spoken.length === shown.length &&
+    spoken.every((text, i) => text?.startsWith(`plot ${i + 1},`)) &&
+    shown.every((genome, i) => (genome === null) === isEmptyLabel(spoken[i])) &&
+    spoken.length - spokenEmpty === shownOccupied,
+  `${spoken.length} entries, ${shownOccupied} occupied / ${spokenEmpty} empty — e.g. ${JSON.stringify(spoken[0])}`,
 );
 
 // ── FAILURE IS NAMED ─────────────────────────────────────────────────────────────────────────
@@ -285,15 +325,16 @@ check(
 
 // ── THE CONTROL THAT MATTERS ─────────────────────────────────────────────────────────────────
 // Everything a visit can do has now been done in this context: a good link, a corrupt one, an
-// empty one. Read the save the same way the baseline was read — from outside any page.
+// empty one. Read storage the same way the baseline was read — from outside any page.
 await b.goto("about:blank");
-const ownAfter = await savedGarden(visitor);
+const storageAfter = await storageOf(visitor);
+const delta = storageDelta(storageBefore, storageAfter);
 check(
-  "CONTROL: the visitor's own save is byte-identical after the visit",
-  ownAfter === ownBefore,
-  ownAfter === ownBefore
-    ? `${ownBefore.length} bytes, unchanged`
-    : `THE VISIT WROTE TO THE VISITOR'S SAVE — ${ownBefore?.length ?? 0} bytes became ${ownAfter?.length ?? 0}`,
+  "CONTROL: the visitor's localStorage is byte-identical after the visit — EVERY key",
+  delta === "",
+  delta === ""
+    ? `all ${storageBefore.length} localStorage key(s) unchanged, ${ownSave.length} saved bytes`
+    : `THE VISIT WROTE TO THE VISITOR'S STORAGE — ${delta}`,
 );
 
 // And the garden still opens as itself. Byte-identity is the mechanism; this is the consequence

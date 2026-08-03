@@ -136,6 +136,18 @@ const FORBIDDEN = [
   "garden/insects.ts",
 ];
 
+/**
+ * The three of those that the positive control can actually prove anything with.
+ *
+ * `garden/garden.ts` is excluded because it is the control's own ENTRY: the walker records it
+ * before traversing a single edge, so "the control reaches it" is true of a walker that reads
+ * nothing at all. That is precisely the defect this whole file exists to replace, so it must not
+ * be counted as a fourth proof — it is asserted separately below, as the entry it is.
+ */
+const REACHED_BY_A_REAL_EDGE = FORBIDDEN.filter(
+  (f) => f !== "garden/garden.ts",
+);
+
 const visit = importClosure("visit/visit.ts");
 const garden = importClosure("garden/garden.ts");
 
@@ -188,16 +200,30 @@ describe("a visit cannot reach the machinery that writes a garden", () => {
    * POSITIVE CONTROL — without it this file is a rubber stamp.
    *
    * A walker that reads nothing reports a perfect clean: a wrong base path, a glob that matches
-   * no files, a pattern blind to the one import shape the codebase actually writes. All four of
-   * these are reached from `garden/garden.ts` through MULTI-LINE import statements, so a walker
+   * no files, a pattern blind to the one import shape the codebase actually writes. Each of
+   * these is reached from `garden/garden.ts` through a MULTI-LINE import statement, so a walker
    * with the previous bug fails here loudly instead of passing there silently.
+   *
+   * The path LENGTH is what makes that true. `>= 2` means at least one edge was traversed;
+   * asserting mere presence is what let the degenerate entry case sit in this list looking like
+   * a fourth proof.
    */
-  it.each(FORBIDDEN)(
-    "POSITIVE CONTROL: garden/garden.ts DOES reach %s",
+  it.each(REACHED_BY_A_REAL_EDGE)(
+    "POSITIVE CONTROL: garden/garden.ts DOES reach %s, across a real edge",
     (forbidden) => {
-      expect(garden.get(forbidden)?.join(" -> ")).toBeTruthy();
+      const path = garden.get(forbidden);
+      expect(path?.join(" -> ")).toBeTruthy();
+      expect(path?.length).toBeGreaterThanOrEqual(2);
     },
   );
+
+  it("garden/garden.ts is the control's ENTRY — this one proves nothing", () => {
+    // Trivial BY CONSTRUCTION, and asserted here so it cannot be mistaken for detection. The
+    // walker seeds its result with the entry before following any import, so a walker that read
+    // no files at all would still "reach" this. It stays in FORBIDDEN because the VISIT must
+    // genuinely never reach it; it is only useless on the control side.
+    expect(garden.get("garden/garden.ts")).toEqual(["garden/garden.ts"]);
+  });
 
   it("POSITIVE CONTROL: the walker read a real graph, not an empty one", () => {
     expect(garden.size).toBeGreaterThan(20);

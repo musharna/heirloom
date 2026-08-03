@@ -384,6 +384,37 @@ describe("the world a garden code claims", () => {
 });
 
 /**
+ * THE ENCODER MUST NOT EMIT A CODE ITS OWN READER REFUSES.
+ *
+ * `packPostcard` clamped plotCount to `Math.max(0, Math.min(MAX_PLOTS, …))` — capped at the top,
+ * floored at ZERO — while `readPostcard` rejects anything below MIN_PLOTS. A caller passing 1 got
+ * a link back with no error, and the failure surfaced on someone else's screen.
+ */
+describe("packing a bed the reader would refuse", () => {
+  it("CONTROL: every legal plot count round-trips", () => {
+    for (let n = MIN_PLOTS; n <= MAX_PLOTS; n++) {
+      const r = readPostcard(packPostcard(sample(n, 0)));
+      expect(r.ok, `${n} plots should pack and read`).toBe(true);
+      if (r.ok) expect(r.postcard.plotCount).toBe(n);
+    }
+  });
+
+  it.each([0, 1, -3])("refuses to pack a %i-plot bed", (n) => {
+    expect(() => packPostcard(sample(Math.max(0, n), 0))).toThrow(
+      new RegExp(String(MIN_PLOTS)),
+    );
+  });
+
+  it("caps at the top rather than throwing — a wide bed is still a bed", () => {
+    // The asymmetry was only ever wrong at the bottom. Over MAX_PLOTS the extra plots carry no
+    // information the reader wants, and dropping them is what the format has always done.
+    const r = readPostcard(packPostcard(sample(MAX_PLOTS + 3, 0)));
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.postcard.plotCount).toBe(MAX_PLOTS);
+  });
+});
+
+/**
  * WHERE A SHARE LINK POINTS.
  *
  * The share button built its URL with `location.pathname.replace(/garden\/$/, "visit/")`, which

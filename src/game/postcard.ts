@@ -125,7 +125,19 @@ export function packPostcard(p: Postcard): string {
   u16(body, p.W);
   u16(body, p.H);
 
-  const plotCount = Math.max(0, Math.min(MAX_PLOTS, p.plotCount));
+  // ASYMMETRIC CLAMP, FIXED. This was `Math.max(0, Math.min(MAX_PLOTS, p.plotCount))`: capped
+  // at the top, floored at zero. The reader rejects anything below MIN_PLOTS, so a caller
+  // passing 1 got a link back with no error at all — a code that this module's own reader
+  // refuses, discovered by whoever opened it.
+  //
+  // It throws rather than clamping UP. Clamping to MIN_PLOTS would invent a plot the sender's
+  // bed does not have and send it as fact, which is the silent-wrong-garden failure in
+  // miniature. A caller below the minimum has a bug, and the share button reports the throw.
+  const plotCount = Math.min(MAX_PLOTS, p.plotCount);
+  if (plotCount < MIN_PLOTS)
+    throw new Error(
+      `cannot pack a ${p.plotCount}-plot garden — a bed has ${MIN_PLOTS} to ${MAX_PLOTS} plots`,
+    );
   body.push(plotCount);
 
   const occupied = p.plots

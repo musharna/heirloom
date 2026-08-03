@@ -45,6 +45,17 @@ const SOURCES: Record<string, string> = Object.fromEntries(
   }).map(([k, v]) => [k.replace(/^\//, ""), v as string]),
 );
 
+/** The pages themselves, read the same way. Vite is what decides what a page's entry IS. */
+const PAGES: Record<string, string> = Object.fromEntries(
+  Object.entries(
+    import.meta.glob("/visit/*.html", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    }),
+  ).map(([k, v]) => [k.replace(/^\//, ""), v as string]),
+);
+
 /**
  * Every specifier a module imports, in ANY of the forms this codebase uses.
  *
@@ -229,5 +240,46 @@ describe("a visit cannot reach the machinery that writes a garden", () => {
     expect(garden.size).toBeGreaterThan(20);
     expect(visit.size).toBeGreaterThan(8);
     expect(visit.has("src/game/postcard.ts")).toBe(true);
+  });
+});
+
+/**
+ * AND THE PAGE REALLY LOADS THAT MODULE, AND ONLY THAT MODULE.
+ *
+ * Everything above walks the graph from `visit/visit.ts`, on the assumption that `visit.ts` is
+ * what the visit page runs. Nothing checked the assumption. `visit/index.html` is the shipped
+ * entry — it is what `vite.config.ts` lists as an input — and a second
+ * `<script type="module" src="../garden/garden.ts">` beside the first would put the controller,
+ * the save writer and the bees on the page while every assertion above stayed green. The graph
+ * would be immaculate and the page would still write the visitor's garden.
+ *
+ * Regex over the source rather than a DOM parse: this project installs no HTML parser, and what
+ * is being asserted is a property of the FILE — how many script elements it contains — which a
+ * lenient parser could quietly normalise away.
+ */
+describe("the shipped visit page", () => {
+  const html = PAGES["visit/index.html"];
+
+  it("CONTROL: the page was actually read", () => {
+    // A glob that matched nothing would make every assertion below vacuously true.
+    expect(html).toBeTypeOf("string");
+    expect(html!.length).toBeGreaterThan(500);
+    expect(html).toContain("<canvas");
+  });
+
+  it("loads exactly one module, and it is the one the graph above walks", () => {
+    const tags = [...html!.matchAll(/<script\b[^>]*>/gi)].map((m) => m[0]);
+    expect(tags).toHaveLength(1);
+    expect(tags[0]).toMatch(/type\s*=\s*"module"/);
+    const src = /src\s*=\s*"([^"]+)"/.exec(tags[0]!)?.[1];
+    expect(src).toBe("./visit.ts");
+    // Named as the walker names it, so the two cannot drift apart silently.
+    expect(`visit/${src!.replace(/^\.\//, "")}`).toBe("visit/visit.ts");
+  });
+
+  it("and carries no inline script either", () => {
+    // `<script>` with a body has no `src` to check, so the count above is the only thing that
+    // catches it — asserted separately because a future edit could relax that count.
+    expect(html).not.toMatch(/<script\b[^>]*>\s*[^\s<]/i);
   });
 });

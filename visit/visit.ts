@@ -32,8 +32,35 @@ const strip = document.getElementById("strip")!;
 const stripText = document.getElementById("strip-text")!;
 const mirror = document.getElementById("mirror")!;
 const say = document.getElementById("say")!;
+const aboutText = document.getElementById("about-text")!;
 
 let failure: string | null = null;
+
+/**
+ * Say something, AFTER the page has loaded.
+ *
+ * `aria-live` announces CHANGES to a region. Content already present when the page finishes
+ * loading is part of the initial render and is not announced at all — and this module is a
+ * deferred `type="module"` script, so everything it writes during evaluation lands before that
+ * point. The failure message was written straight into `#say` at module scope, which is exactly
+ * the case a live region stays silent for. A player following a broken link saw amber text they
+ * could not read and heard nothing.
+ *
+ * Cleared and re-set on the following frame for the same reason `garden/a11y.ts` does it: a
+ * region re-set to an identical string announces nothing, and two failed links in a row would
+ * otherwise be one announcement.
+ */
+function announceAfterLoad(text: string): void {
+  if (!text) return;
+  const speak = (): void => {
+    say.textContent = "";
+    requestAnimationFrame(() => {
+      say.textContent = text;
+    });
+  };
+  if (document.readyState === "complete") requestAnimationFrame(speak);
+  else window.addEventListener("load", () => requestAnimationFrame(speak));
+}
 
 function fail(message: string): void {
   // §10: name what went wrong. An empty garden rendered silently would read as the sender
@@ -45,7 +72,16 @@ function fail(message: string): void {
   stripText.textContent = `that garden link could not be opened — ${message}`;
   document.getElementById("strip-back")!.textContent = "start your own garden";
   wrap.hidden = true;
-  say.textContent = stripText.textContent;
+
+  // The same removal, for the reader who never sees the canvas. The static description says
+  // "someone else's garden, as it stood when they shared it … the plants in it will not grow any
+  // further", and the mirror is an empty list labelled "this garden". Left in place on a broken
+  // link, the two describe — in careful detail — a garden that does not exist. Hiding the canvas
+  // and leaving the prose is the same defect twice, told to two different audiences.
+  aboutText.textContent = `That link did not open a garden — ${message}. There is nothing here to describe; the link is broken, or was never a garden link.`;
+  mirror.remove();
+
+  announceAfterLoad(stripText.textContent);
 }
 
 /**
@@ -148,13 +184,18 @@ if (!failure) {
 // activate. `plotLabel` rather than a phrasing of its own — it already carries the isGrown gate
 // that keeps an unfinished plant from disclosing its traits, and a visit is not a loophole in
 // §4.
-mirror.replaceChildren(
-  ...occupants.map((occ, i) => {
-    const li = document.createElement("li");
-    li.textContent = plotLabel(i, occ, FROZEN);
-    return li;
-  }),
-);
+//
+// Guarded, because `fail` has already taken the list off the page. Filling a detached element
+// throws nothing and shows nothing, which is precisely the kind of quiet that put an empty list
+// labelled "this garden" in front of a reader in the first place.
+if (!failure)
+  mirror.replaceChildren(
+    ...occupants.map((occ, i) => {
+      const li = document.createElement("li");
+      li.textContent = plotLabel(i, occ, FROZEN);
+      return li;
+    }),
+  );
 
 declare global {
   interface Window {

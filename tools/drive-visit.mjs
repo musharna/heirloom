@@ -306,6 +306,13 @@ check(
 // waitForFunction, never a one-shot read of the live region: a live region gets blanked and
 // refilled to force a re-announcement, and a single sample can land in the gap and report a
 // silence that was never there.
+//
+// RENAMED. This said "it is announced, not only drawn", and it could not tell that apart from
+// text that was merely present: it passed for the whole life of this branch against a region
+// that never spoke a word, because the message was written at module scope and a live region
+// says nothing about content that was already there when the page loaded. Presence is what this
+// measures, so presence is what it now claims; the announcement is asserted further down, by a
+// recorder that can tell the two apart.
 const announced = await b
   .waitForFunction(
     () => (document.getElementById("say")?.textContent ?? "").length > 0,
@@ -313,11 +320,91 @@ const announced = await b
   )
   .then(() => true)
   .catch(() => false);
-check("CONTROL: and it is announced, not only drawn", announced);
+check("CONTROL: the failure text reaches the live region at all", announced);
 check(
   "CONTROL: a failed visit draws no garden — an empty bed is not a photograph of one",
   await b.evaluate(() => document.getElementById("wrap").hidden),
 );
+
+// The same removal, for the reader who never sees the canvas. Hiding the picture while leaving
+// the prose is the same defect twice, told to two different audiences: the static description
+// says "someone else's garden, as it stood when they shared it … the plants in it will not grow
+// any further", and the mirror is a list labelled "this garden". After a broken link those two
+// described, in careful detail, a garden that does not exist.
+const read = await b.evaluate(() => ({
+  about: document.getElementById("about-text")?.textContent ?? "",
+  mirror: document.getElementById("mirror") ? "present" : "removed",
+}));
+check(
+  "and it does not DESCRIBE one either — the standing description is replaced",
+  !/as it stood when they shared it/.test(read.about) &&
+    /did not open a garden/.test(read.about),
+  JSON.stringify(read.about.slice(0, 70)),
+);
+check(
+  'and the empty list labelled "this garden" is gone',
+  read.mirror === "removed",
+  read.mirror,
+);
+
+// A live region announces CHANGES. Content already there when the page finishes loading is part
+// of the initial render and is not announced at all — and this module is a deferred
+// `type="module"` script, so everything it writes at module scope lands BEFORE DOMContentLoaded,
+// let alone before load. Asserting the text is PRESENT cannot tell the two cases apart, which is
+// why the check above ("it is announced, not only drawn") passed against a region that never
+// spoke.
+//
+// So: a recorder attached at DOMContentLoaded, which is after deferred modules have run. A write
+// at module scope happens before it exists and is invisible to it; a write after load is a
+// mutation it sees. The two outcomes are opposite, which is what the previous check lacked.
+{
+  const ears = await browser.newContext({
+    viewport: { width: 800, height: 620 },
+  });
+  await ears.addInitScript(() => {
+    window.__sayChanges = [];
+    document.addEventListener("DOMContentLoaded", () => {
+      const say = document.getElementById("say");
+      if (!say) return;
+      window.__sayAtDomReady = say.textContent ?? "";
+      new MutationObserver(() => {
+        window.__sayChanges.push({
+          at: document.readyState,
+          text: say.textContent ?? "",
+        });
+      }).observe(say, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+      });
+    });
+  });
+  const ear = await ears.newPage();
+  watch(ear);
+  await openVisit(ear, "#garden=notarealgarden");
+  const heard = await ear
+    .waitForFunction(
+      () => window.__sayChanges.some((c) => c.text.length > 0),
+      { timeout: 5000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  const log = await ear.evaluate(() => ({
+    changes: window.__sayChanges,
+    atDomReady: window.__sayAtDomReady,
+  }));
+  check(
+    "CONTROL: the recorder was in place before anything could speak",
+    log.atDomReady === "",
+    `#say held ${JSON.stringify(log.atDomReady)} at DOMContentLoaded`,
+  );
+  check(
+    "the failure ARRIVES in the live region as a change — the only kind it speaks",
+    heard,
+    `${log.changes.length} mutation(s): ${JSON.stringify(log.changes.map((c) => `${c.at}:${c.text.slice(0, 24)}`))}`,
+  );
+  await ears.close();
+}
 
 await openVisit(b, "");
 const noLink = await b.evaluate(() => window.__visitError());

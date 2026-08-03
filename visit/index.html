@@ -93,9 +93,14 @@
       <a id="strip-back" href="../garden/">return to your own garden</a>
     </div>
     <div id="wrap"><canvas id="c" aria-hidden="true"></canvas></div>
-    <div class="sr">
+    <!-- Identified, because it is only true if a garden actually opened. A broken link left
+         this paragraph describing "someone else's garden … the plants in it will not grow any
+         further" beside an EMPTY list labelled "this garden", so a blind visitor following a
+         corrupted link was read a careful description of a garden that does not exist.
+         `visit.ts` replaces it, and removes the list, when the link fails. -->
+    <div class="sr" id="about">
       <h1>A shared Heirloom garden</h1>
-      <p>
+      <p id="about-text">
         Someone else's garden, as it stood when they shared it. Nothing here can
         be planted, crossed, cloned or spliced — it is a photograph, and the
         plants in it will not grow any further.

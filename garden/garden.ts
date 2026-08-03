@@ -36,6 +36,7 @@ import {
   layoutChanged,
   type Layout,
 } from "../src/game/layout";
+import { packPostcard } from "../src/game/postcard";
 import {
   REPLAY_CAP,
   SAVE_KEY,
@@ -1284,6 +1285,43 @@ const thumbQueue: HTMLElement[] = [];
 let pumping = false;
 let drawerIO: IntersectionObserver | null = null;
 
+/**
+ * This garden as a postcard, for the share link.
+ *
+ * `retirementLog` rather than `garden.retired`: a restored garden's `retired` is empty (see the
+ * comment on `retirementLog` above) because retired plants are composited into the background
+ * buffer, not kept as objects. Building the forest from `garden.retired` would silently ship an
+ * empty forest to anyone who shares after a reload.
+ *
+ * The forest is sent `slice(-BACKGROUND_REPLAY)` — newest entries, oldest trimmed — because
+ * those are the layers that actually render (see `remainingContrast`), and order within them is
+ * load-bearing: the forest layers by retirement order.
+ */
+function gardenPostcard(): string {
+  return packPostcard({
+    W,
+    H,
+    plotCount: garden.plots.length,
+    plots: garden.plots.map((p) =>
+      p.occupant
+        ? {
+            genome: p.occupant.genome,
+            // Clamped here too (packPostcard also clamps at pack time), so the intent is local:
+            // past maxTick nothing about the plant changes, so a garden left open overnight
+            // sends the same picture as one shared the moment it finished.
+            age: Math.min(now - p.occupant.plantedAt, p.occupant.maxTick),
+          }
+        : null,
+    ),
+    forest: retirementLog.slice(-BACKGROUND_REPLAY).flatMap((e) => {
+      const parsed = parseGenome(e.g);
+      // Skip rather than throw: a single corrupted history entry should not make the whole
+      // garden unshareable.
+      return parsed.ok ? [{ genome: parsed.genome, x: e.x }] : [];
+    }),
+  });
+}
+
 function pumpThumbs(): void {
   const deadline = performance.now() + 6; // leave most of a 16.7ms frame for the garden
   while (thumbQueue.length > 0 && performance.now() < deadline) {
@@ -1295,6 +1333,36 @@ function pumpThumbs(): void {
   }
   if (thumbQueue.length > 0) requestAnimationFrame(pumpThumbs);
   else pumping = false;
+}
+
+/**
+ * The head-of-drawer share line, in BOTH the empty and populated branches of `renderDrawer`.
+ *
+ * A brand-new garden with no retirement history is still shareable — a bare bed is a legitimate
+ * thing to send — so this cannot live only in the branch that has entries to show.
+ */
+const shareRow = `<button id="share-garden" type="button">copy a link to this garden</button>`;
+
+/** Wire the share button after each `renderDrawer` innerHTML assignment re-creates it. */
+function wireShareButton(): void {
+  drawerEl.querySelector("#share-garden")?.addEventListener("click", () => {
+    const url = `${location.origin}${location.pathname.replace(/garden\/$/, "visit/")}#garden=${gardenPostcard()}`;
+    void navigator.clipboard
+      .writeText(url)
+      .then(() => {
+        notice = "link copied — it opens this garden for anyone who follows it";
+        announce(notice);
+        setTimeout(() => {
+          notice = "";
+        }, 3200);
+      })
+      .catch((e: Error) => {
+        // Clipboard access is permission-gated and fails in plenty of contexts. Fold the URL
+        // into the notice, the same fallback the tray's share code already uses (above).
+        notice = `could not copy (${e.message}) — ${url}`;
+        announce(notice);
+      });
+  });
 }
 
 function renderDrawer(): void {
@@ -1315,18 +1383,23 @@ function renderDrawer(): void {
   drawerEl.hidden = false;
   if (retirementLog.length === 0) {
     drawerEl.innerHTML =
+      shareRow +
       '<p class="empty">nothing retired yet — plant over a flower and it will keep here</p>';
+    wireShareButton();
     return;
   }
-  drawerEl.innerHTML = retirementLog
-    .map(
-      (e) =>
-        `<figure data-code="${esc(e.g)}" tabindex="0">` +
-        `<canvas width="192" height="168"></canvas>` +
-        `<figcaption>${esc(shortLabel(e.g))}</figcaption></figure>`,
-    )
-    .reverse()
-    .join("");
+  drawerEl.innerHTML =
+    shareRow +
+    retirementLog
+      .map(
+        (e) =>
+          `<figure data-code="${esc(e.g)}" tabindex="0">` +
+          `<canvas width="192" height="168"></canvas>` +
+          `<figcaption>${esc(shortLabel(e.g))}</figcaption></figure>`,
+      )
+      .reverse()
+      .join("");
+  wireShareButton();
 
   // Painted LAZILY, and once each. Growing and painting 200 plants the moment the drawer opens
   // would stall the frame; growing the eight actually on screen does not. Each figure is
@@ -1834,6 +1907,8 @@ requestAnimationFrame(frame);
  */
 Object.assign(window as unknown as Record<string, unknown>, {
   __ready: true,
+  /** The packed garden code, for a driver to compare against what the share button copies. */
+  __gardenCode: () => gardenPostcard(),
   __seek: (t: number) => {
     now = t;
   },

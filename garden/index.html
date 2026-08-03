@@ -246,6 +246,11 @@
         text-align: center;
         padding: 14px;
       }
+      /* Full width, like `.empty` above — the drawer is a `display: grid`, and without this the
+         button would take one 96px grid cell like a retired-plant figure. */
+      #drawer #share-garden {
+        grid-column: 1 / -1;
+      }
       /*
        * Present to assistive technology, absent from the screen.
        *

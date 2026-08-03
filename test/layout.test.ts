@@ -8,8 +8,10 @@ import {
   MIN_PLOT_WIDTH,
   MIN_W,
   SOIL_BAND,
+  availableBox,
   computeLayout,
   layoutChanged,
+  plotPositions,
 } from "../src/game/layout";
 
 /** Real device viewports, not round numbers. */
@@ -133,6 +135,16 @@ describe("computeLayout", () => {
     expect(computeLayout(800, 600)).toEqual(computeLayout(800, 600));
   });
 
+  it("computeLayout places its plots where plotPositions says", () => {
+    // The visit places the SENDER's plots with `plotPositions` alone. If the two ever drift,
+    // a visited garden's plants stand somewhere other than they did in the garden the link
+    // was made from — a photograph that moved its subject.
+    for (const w of [360, 700, 1180]) {
+      const l = computeLayout(w + 16, 540);
+      expect(l.plotXs).toEqual(plotPositions(l.W, l.plotXs.length));
+    }
+  });
+
   it("survives degenerate viewports without producing NaN", () => {
     for (const [w, h] of [
       [0, 0],
@@ -167,5 +179,54 @@ describe("layoutChanged", () => {
     expect(
       layoutChanged(computeLayout(412, 839), computeLayout(1440, 900)),
     ).toBe(true);
+  });
+});
+
+/**
+ * A WORLD HEIGHT IS NOT AN AVAILABLE HEIGHT.
+ *
+ * `computeLayout` answers two different questions at once, and the visit needed only the first.
+ * Its H is clamped to [MIN_H, MAX_H] deliberately — a plant is ~250px tall whatever the screen
+ * is, so a short screen gets letterboxing rather than a world made of sky. Read back as "how
+ * much room is there", that floor is a lie: the visit fitted the sender's 470-tall world into
+ * `box.H` and, on a 1180x400 phone in landscape, sized the canvas 430px tall inside 400px of
+ * `overflow: hidden`.
+ */
+describe("availableBox", () => {
+  it("reports less room than the world floor when there IS less room", () => {
+    // The defect, stated as a number. 400 - 70 = 330, which is below MIN_H; computeLayout's H
+    // cannot go below MIN_H at all, which is what made it unusable as an available height.
+    expect(availableBox(1180, 400).H).toBeLessThan(MIN_H);
+    expect(computeLayout(1180, 400).H).toBe(MIN_H);
+  });
+
+  it("shrinks with the viewport instead of flooring, at both ends", () => {
+    for (const [name, w, h] of VIEWPORTS) {
+      const box = availableBox(w, h);
+      expect(box.W, `${name} width`).toBeLessThanOrEqual(w);
+      expect(box.H, `${name} height`).toBeLessThanOrEqual(h);
+      expect(box.W, `${name} width`).toBeGreaterThan(0);
+      expect(box.H, `${name} height`).toBeGreaterThan(0);
+    }
+  });
+
+  it("is what computeLayout clamps — one definition of the margins", () => {
+    // The floors this replaced (`Math.max(320, …)`) were provably inert: MIN_W is 360 and MIN_H
+    // is 430, so the clamp swallowed them. Pinned across the real viewport set so the
+    // refactor cannot have changed an answer.
+    for (const [name, w, h] of [...VIEWPORTS, ["short landscape", 1180, 400]] as [
+      string,
+      number,
+      number,
+    ][]) {
+      const box = availableBox(w, h);
+      const layout = computeLayout(w, h);
+      expect(layout.W, `${name} W`).toBe(
+        Math.round(Math.min(MAX_W, Math.max(MIN_W, box.W))),
+      );
+      expect(layout.H, `${name} H`).toBe(
+        Math.round(Math.min(MAX_H, Math.max(MIN_H, box.H))),
+      );
+    }
   });
 });

@@ -197,7 +197,12 @@ export function paintStage(
   // reads as distance behind them — the same trick a stage cyclorama uses, and for the same
   // reason. Kept very quiet: this is a dark game, and anything more turns into a sunset.
   const line = soilTop ?? soilLine(h);
-  const sky = ctx.createLinearGradient(0, Math.max(0, line - h * 0.62), 0, line);
+  const sky = ctx.createLinearGradient(
+    0,
+    Math.max(0, line - h * 0.62),
+    0,
+    line,
+  );
   sky.addColorStop(0, "rgba(94,126,140,0)");
   sky.addColorStop(0.72, "rgba(94,126,140,0.045)");
   sky.addColorStop(1, "rgba(120,150,158,0.085)");
@@ -310,8 +315,13 @@ export function soilLine(h: number): number {
   return h - Math.max(10, h * 0.045);
 }
 
-/** Ticks a flower takes to open once its shoot has finished. */
-const OPEN_TICKS = 26;
+/**
+ * Ticks a flower takes to open once its shoot has finished.
+ *
+ * Exported so `SETTLE_TICKS` can be asserted against it rather than described as "comfortably
+ * past OPEN_TICKS" in a comment that nothing checks.
+ */
+export const OPEN_TICKS = 26;
 
 /**
  * A pool of shadow where a stem meets the soil.
@@ -365,7 +375,9 @@ export function paintPlant(
    */
   const opening = (tick: number): number => {
     const age = untilTick - tick;
-    return age >= OPEN_TICKS ? 1 : 0.32 + 0.68 * ease(Math.max(0, age) / OPEN_TICKS);
+    return age >= OPEN_TICKS
+      ? 1
+      : 0.32 + 0.68 * ease(Math.max(0, age) / OPEN_TICKS);
   };
   // Stems first, deepest chains behind. Each carries an ink contour: the art direction
   // applies to stems as well as petals, and previously only petals were outlined.

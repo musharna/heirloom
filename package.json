@@ -13,7 +13,7 @@
     "measure": "node tools/measure-depth.mjs",
     "shoot": "node tools/shoot-garden.mjs",
     "shoot:lookdev": "node tools/shoot.mjs",
-    "drive": "node tools/drive-verbs.mjs && node tools/drive-forest.mjs && node tools/drive-persist.mjs && node tools/drive-notebook.mjs && node tools/drive-drawer.mjs && node tools/drive-keyboard.mjs && node tools/drive-pollinator.mjs && node tools/check-motion.mjs && node tools/check-viewports.mjs && node tools/check-phone.mjs"
+    "drive": "node tools/run-drivers.mjs && node tools/check-motion.mjs && node tools/check-viewports.mjs && node tools/check-phone.mjs"
   },
   "devDependencies": {
     "typescript": "^7.0.2",

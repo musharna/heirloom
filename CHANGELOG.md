@@ -5,6 +5,43 @@ branch, so the units here are **milestones**, newest first, dated by the commits
 them. Where a milestone retracted or reverted something, that is recorded too — a changelog that
 only lists what worked is a marketing document.
 
+## Garden sharing — 2026-08-02
+
+- `#garden=` opens a **visit**: someone else's bed and the forest behind it, read-only, frozen at
+  the moment they shared it. Growth is pinned and motion still runs — two clocks, and only one of
+  them stops. A live visit would drift away from the garden it was sent from; a still one would
+  be the only motionless screen in the game.
+- A new page, `/visit/`, rather than a `visiting` flag inside the garden. Read-only is a property
+  of the module graph: the visit does not import the four verbs, the save writer, or the
+  pollinators, so no guard can be forgotten in one of six places. `test/visit-isolation.test.ts`
+  walks the transitive import graph and names the offending path if one ever appears.
+- A codec, `src/game/postcard.ts`, packs a whole garden into a URL fragment: the sender's world
+  size and plot count, each occupied plot with its index, genome and age, and the forest to the
+  depth that actually renders. 708 bytes at most, ~944 characters, and nothing leaves the browser.
+  Empty plots are transmitted as an absence rather than a sentinel genome — every bit pattern is a
+  legal genome, so a "zero genome" placeholder would have decoded to a real white flower.
+- **Copy a link to this garden** at the head of the drawer, which is already the garden's history.
+- The genome bit layout now has one definition, shared by the single-flower codec and the
+  postcard. Two copies would have decoded each other's genomes into different, perfectly valid,
+  checksum-passing flowers.
+- The draw half of the garden's frame loop is extracted to `src/scene.ts`, so both pages paint
+  through one renderer rather than two that drift.
+- Fixed: `npm run drive` still named all seven drivers by hand while CI had already moved to a
+  glob — the two lists that this project's deploy gate exists because of. Both derive from the
+  directory now. The runner is named `run-drivers.mjs`, outside the `drive-*` glob, because a
+  runner that matched it would have been executed as a driver too, double-running the whole suite
+  silently.
+- Fixed: `visit/` was never in `tsconfig`'s include list, so `tsc --noEmit` — the first half of
+  `npm run build` — had been skipping a production entry point since the page was added. Found
+  while deliberately sabotaging `visit.ts` to watch a control fail, and noticing the sabotage was
+  not typechecked either.
+- Four checks prescribed by the design documents **could not fail**, and were replaced rather than
+  kept: a frozen-growth control that compared genomes (which do not change with age), a
+  paint-order check that diffed a render seeded from the wall clock, a module-graph check that
+  was a grep of one file, and a decoder that dropped malformed input silently. The full list, with
+  why each was wrong, is recorded in the design and plan documents under "Corrected during
+  implementation".
+
 ## Pollinators — 2026-08-02
 
 - Insects visit the bed. Occasionally one carries pollen from a plant in the retirement log and

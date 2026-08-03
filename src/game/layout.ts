@@ -60,19 +60,73 @@ export const MAX_H = 470;
 export const MIN_PLOTS = 2;
 export const MAX_PLOTS = 9;
 
+/**
+ * How many retired plants are composited into the background on load.
+ *
+ * Held at the old REPLAY_CAP (see `./save`) so load time is exactly what it was. Beyond this
+ * depth a layer has washed out to under 5% contrast (see `effectiveDepth`) and would be
+ * invisible anyway, so paying `growPlant` for it buys nothing.
+ */
+export const BACKGROUND_REPLAY = 60;
+
 const clamp = (v: number, lo: number, hi: number): number =>
   Math.min(hi, Math.max(lo, v));
 
-export function computeLayout(viewportW: number, viewportH: number): Layout {
-  // Margins: a little breathing room horizontally, and a line for the HUD.
-  const availW = Math.max(320, viewportW - 16);
-  const availH = Math.max(320, viewportH - 70);
-
-  const W = Math.round(clamp(availW, MIN_W, MAX_W));
-  const H = Math.round(clamp(availH, MIN_H, MAX_H));
-
+/**
+ * Where N plots sit in a world W wide.
+ *
+ * Exported because the VISIT needs to place the sender's plots in the sender's world, and
+ * `computeLayout` cannot answer that — it decides the count from the local viewport. A second
+ * copy of this arithmetic would put a visited garden's plants at subtly different positions
+ * than the garden it was made from, which is the one thing a photograph must not do.
+ */
+export function plotPositions(W: number, plots: number): number[] {
+  if (plots <= 0) return [];
   // Inset scales with width instead of staying at 135. A fixed inset on a 396-wide world
   // would eat two thirds of it, leaving the plots crushed into the middle.
+  const inset = Math.min(135, W * 0.14);
+  const usable = W - inset * 2;
+  if (plots === 1) return [W / 2];
+  return Array.from(
+    { length: plots },
+    (_, i) => inset + (i / (plots - 1)) * usable,
+  );
+}
+
+/**
+ * How much room a page actually has, before any clamping: the viewport less the chrome.
+ *
+ * Split out of `computeLayout` because the two questions it used to answer inside one function
+ * are genuinely different, and a VISIT needs the first without the second. `computeLayout` goes
+ * on to clamp H to [MIN_H, MAX_H] — a WORLD height, deliberately floored at 430 so a short
+ * screen gets letterboxing rather than a world made of sky. Read back as an AVAILABLE height
+ * that number clips: the visit fitted a 470-tall world into `box.H` and, at a 1180x400 phone in
+ * landscape, produced a 430px canvas inside 400px of `overflow: hidden` — about 15px lost off
+ * the top and the bottom.
+ *
+ * Margins: a little breathing room horizontally, and a line for the HUD (the visit's strip sits
+ * in the same band). The `Math.max(320, …)` floors that used to be here are gone: MIN_W is 360
+ * and MIN_H is 430, so `clamp` below swallowed them whole and they never changed an answer —
+ * but as an available box they would be a lie about a small window.
+ */
+export function availableBox(
+  viewportW: number,
+  viewportH: number,
+): { W: number; H: number } {
+  return {
+    W: Math.max(1, viewportW - 16),
+    H: Math.max(1, viewportH - 70),
+  };
+}
+
+export function computeLayout(viewportW: number, viewportH: number): Layout {
+  const avail = availableBox(viewportW, viewportH);
+
+  const W = Math.round(clamp(avail.W, MIN_W, MAX_W));
+  const H = Math.round(clamp(avail.H, MIN_H, MAX_H));
+
+  // The plot COUNT comes from the local viewport; where those plots go is `plotPositions`.
+  // Splitting the two is what lets a visit keep the second and reject the first.
   const inset = Math.min(135, W * 0.14);
   const usable = W - inset * 2;
   const plots = clamp(
@@ -81,15 +135,7 @@ export function computeLayout(viewportW: number, viewportH: number): Layout {
     MAX_PLOTS,
   );
 
-  const plotXs =
-    plots === 1
-      ? [W / 2]
-      : Array.from(
-          { length: plots },
-          (_, i) => inset + (i / (plots - 1)) * usable,
-        );
-
-  return { W, H, soil: H - SOIL_BAND, plotXs };
+  return { W, H, soil: H - SOIL_BAND, plotXs: plotPositions(W, plots) };
 }
 
 /** Whether two layouts differ in any way that requires re-growing the garden. */

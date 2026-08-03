@@ -246,6 +246,37 @@
         text-align: center;
         padding: 14px;
       }
+      /* Full width, like `.empty` above — the drawer is a `display: grid`, and without this the
+         button would take one 96px grid cell like a retired-plant figure. */
+      #drawer #share-garden {
+        grid-column: 1 / -1;
+      }
+      /* The clipboard fallback. Full width for the same reason as the button, and the OPPOSITE
+         of `#hint` in every property that matters: `#hint` is one nowrap ellipsised line, which
+         is fine for the tray's 14-character code and useless for a ~1000-character garden link.
+         This wraps, breaks mid-token — a base64url fragment has no spaces to break at — and
+         scrolls if it still does not fit. */
+      #drawer #share-fallback {
+        grid-column: 1 / -1;
+        display: grid;
+        gap: 4px;
+      }
+      #drawer #share-fallback label {
+        opacity: 0.7;
+      }
+      #drawer #share-fallback textarea {
+        width: 100%;
+        box-sizing: border-box;
+        font: inherit;
+        color: #cfe0d4;
+        background: #0d1013;
+        border: 1px solid #33413a;
+        border-radius: 3px;
+        padding: 6px;
+        resize: vertical;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
       /*
        * Present to assistive technology, absent from the screen.
        *

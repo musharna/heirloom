@@ -1,10 +1,15 @@
 import { describe, it, expect } from "vitest";
 import { mulberry32 } from "../src/rng";
 import {
+  BitReader,
+  BitWriter,
   GENOME_VERSION,
+  PAYLOAD_BYTES,
   genomeSeed,
   parseGenome,
+  readGenomeBits,
   serialize,
+  writeGenomeBits,
 } from "../src/genome/serialize";
 import {
   genomesEqual,
@@ -65,6 +70,30 @@ describe("serialize", () => {
     const a: Genome = { ...PINNED, V: poly(0b101010, 0b000111) };
     const b: Genome = { ...PINNED, V: poly(0b101011, 0b000111) };
     expect(serialize(a)).not.toBe(serialize(b));
+  });
+});
+
+describe("genome bits, shared with the postcard codec", () => {
+  it("round-trips a genome through the bare bit layout", () => {
+    const rand = mulberry32(7);
+    for (let i = 0; i < 50; i++) {
+      const g = randomGenome(rand);
+      const w = new BitWriter(PAYLOAD_BYTES);
+      writeGenomeBits(w, g);
+      expect(readGenomeBits(new BitReader(w.bytes))).toEqual(g);
+    }
+  });
+
+  // The whole point of exporting these: one bit layout, two callers. If serialize() ever stops
+  // going through writeGenomeBits, this is what notices.
+  it("produces the same bits serialize() puts in its payload", () => {
+    const g = randomGenome(mulberry32(99));
+    const w = new BitWriter(PAYLOAD_BYTES);
+    writeGenomeBits(w, g);
+    // serialize() = version byte + these payload bytes + checksum byte.
+    const full = serialize(g);
+    const sameGenome = readGenomeBits(new BitReader(w.bytes));
+    expect(serialize(sameGenome)).toBe(full);
   });
 });
 

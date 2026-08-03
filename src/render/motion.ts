@@ -18,6 +18,17 @@
  * its own soil would be unmissable.
  */
 
+/**
+ * Ticks per frame. Unhurried without being tedious.
+ *
+ * Here rather than in `garden/garden.ts` because it is not the game's alone: a VISIT advances
+ * `motionNow` at this same rate so a shared garden sways exactly as it did for the sender, and
+ * `src/game/pollinator.ts` states its durations in ticks against it. A second copy of a tick
+ * rate would let one of those three drift silently — the sway would simply run at the wrong
+ * speed, with nothing to fail.
+ */
+export const SPEED = 1.4;
+
 /** Radians-per-tick of the slow component. A full breath takes ~500 ticks. */
 const W_SLOW = 0.0125;
 /** A faster, smaller component. Summing two incommensurate periods stops the sway from

@@ -30,9 +30,14 @@ import {
   shownBlooms as bloomsOf,
   traySlot,
 } from "../src/game/hit";
-import { computeLayout, layoutChanged, type Layout } from "../src/game/layout";
 import {
   BACKGROUND_REPLAY,
+  computeLayout,
+  layoutChanged,
+  type Layout,
+} from "../src/game/layout";
+import { packPostcard, visitPath } from "../src/game/postcard";
+import {
   REPLAY_CAP,
   SAVE_KEY,
   fromSave,
@@ -71,43 +76,14 @@ import {
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
-import { paintPlantCached } from "../src/render/cache";
 import { paintThumb } from "../src/render/thumb";
-import {
-  RECEDE_TICKS,
-  applyPlacement,
-  applySway,
-  lerpPlacement,
-  swayAt,
-} from "../src/render/motion";
+import { RECEDE_TICKS, SPEED } from "../src/render/motion";
 import { placeRetired, type Placement } from "../src/render/forest";
-import {
-  bedDepth,
-  paintOrder,
-  toCanvasSpace,
-  toPlotSpace,
-} from "../src/render/bed";
-import { express } from "../src/genome/express";
+import { bedDepth, toCanvasSpace, toPlotSpace } from "../src/render/bed";
 import { mulberry32 } from "../src/rng";
-import {
-  PALETTE,
-  paintPlant,
-  paintContactShadow,
-  paintSoil,
-  paintStage,
-} from "../src/render/stage";
+import { PALETTE, paintPlant } from "../src/render/stage";
+import { drawScene, sharedAge } from "../src/scene";
 import type { Plant, Vec2 } from "../src/types";
-
-/** Ticks per frame. Unhurried without being tedious. */
-const SPEED = 1.4;
-
-/**
- * Ticks after a plant's last segment before it is treated as finished.
- *
- * Comfortably past OPEN_TICKS, because a flower that was still opening when its image was
- * cached would stay half-open for as long as the plant stands there.
- */
-const SETTLE_TICKS = 40;
 
 /**
  * World geometry, from the viewport. Reassignable rather than constant: a phone rotated to
@@ -1309,6 +1285,45 @@ const thumbQueue: HTMLElement[] = [];
 let pumping = false;
 let drawerIO: IntersectionObserver | null = null;
 
+/**
+ * This garden as a postcard, for the share link.
+ *
+ * `retirementLog` rather than `garden.retired`: a restored garden's `retired` is empty (see the
+ * comment on `retirementLog` above) because retired plants are composited into the background
+ * buffer, not kept as objects. Building the forest from `garden.retired` would silently ship an
+ * empty forest to anyone who shares after a reload.
+ *
+ * The forest is sent `slice(-BACKGROUND_REPLAY)` — newest entries, oldest trimmed — because
+ * those are the layers that actually render (see `remainingContrast`), and order within them is
+ * load-bearing: the forest layers by retirement order.
+ */
+function gardenPostcard(): string {
+  return packPostcard({
+    W,
+    H,
+    plotCount: garden.plots.length,
+    plots: garden.plots.map((p) =>
+      p.occupant
+        ? {
+            genome: p.occupant.genome,
+            // `sharedAge`, not a clamp written out here. This line used to cap the age at
+            // `maxTick` on the premise that "past maxTick nothing about the plant changes",
+            // and that premise is false: blooms are created AT tip termination and take
+            // OPEN_TICKS more to open, so a garden shared in full flower arrived with its
+            // terminal flowers 32% open and stayed that way. The rule has one home now.
+            age: sharedAge(now - p.occupant.plantedAt, p.occupant.maxTick),
+          }
+        : null,
+    ),
+    forest: retirementLog.slice(-BACKGROUND_REPLAY).flatMap((e) => {
+      const parsed = parseGenome(e.g);
+      // Skip rather than throw: a single corrupted history entry should not make the whole
+      // garden unshareable.
+      return parsed.ok ? [{ genome: parsed.genome, x: e.x }] : [];
+    }),
+  });
+}
+
 function pumpThumbs(): void {
   const deadline = performance.now() + 6; // leave most of a 16.7ms frame for the garden
   while (thumbQueue.length > 0 && performance.now() < deadline) {
@@ -1320,6 +1335,88 @@ function pumpThumbs(): void {
   }
   if (thumbQueue.length > 0) requestAnimationFrame(pumpThumbs);
   else pumping = false;
+}
+
+/**
+ * The head-of-drawer share line, in BOTH the empty and populated branches of `renderDrawer`.
+ *
+ * A brand-new garden with no retirement history is still shareable — a bare bed is a legitimate
+ * thing to send — so this cannot live only in the branch that has entries to show.
+ */
+const shareRow = `<button id="share-garden" type="button">copy a link to this garden</button>`;
+
+/** Wire the share button after each `renderDrawer` innerHTML assignment re-creates it. */
+function wireShareButton(): void {
+  drawerEl.querySelector("#share-garden")?.addEventListener("click", () => {
+    // `visitPath` THROWS when it cannot rewrite the path, and that is the point. This used to
+    // be `location.pathname.replace(/garden\/$/, "visit/")` inline, which misses the
+    // `…/garden/index.html` form GitHub Pages also serves and returns its input unchanged when
+    // it does. The link then kept the garden path, `#garden=` matched nothing there, and the
+    // recipient opened it to their OWN garden with nothing anywhere saying so.
+    let url: string;
+    try {
+      url = `${location.origin}${visitPath(location.pathname)}#garden=${gardenPostcard()}`;
+    } catch (e) {
+      notice = `could not make a link to this garden — ${(e as Error).message}`;
+      announce(notice);
+      return;
+    }
+    void navigator.clipboard
+      .writeText(url)
+      .then(() => {
+        notice = "link copied — it opens this garden for anyone who follows it";
+        announce(notice);
+        setTimeout(() => {
+          notice = "";
+        }, 3200);
+      })
+      .catch((e: Error) => {
+        // Clipboard access is permission-gated and fails in plenty of contexts, so the fallback
+        // is the only way the player gets their link. It is NOT the tray's fallback, which folds
+        // the URL into `notice`: `#hint` is one line, `nowrap`, `overflow: hidden`,
+        // `text-overflow: ellipsis`. The tray's payload is 14 characters and survives that; a
+        // garden link is around a thousand and arrives as an ellipsis. The player was shown a
+        // truncated URL and had no way to recover the rest of it.
+        notice = `could not copy (${e.message}) — the link is in the drawer; select it and copy it by hand`;
+        announce(notice);
+        showShareFallback(url);
+      });
+  });
+}
+
+/**
+ * The link itself, in something the player can select.
+ *
+ * A textarea rather than a `<p>`: it wraps, it scrolls, and a triple-click or ctrl-A inside it
+ * selects exactly the URL and nothing else. Read-only rather than disabled — a disabled field
+ * is not selectable and is skipped by keyboard navigation, which would leave a keyboard-only
+ * player exactly where the ellipsis did.
+ *
+ * Focused and pre-selected, so for most players "copy by hand" is one keystroke.
+ *
+ * Lives in the drawer, next to the button that produced it. `renderDrawer` rewrites the drawer
+ * wholesale on open and close, which clears this — correct, because a stale link to a garden
+ * that has since changed is worse than no link.
+ */
+function showShareFallback(url: string): void {
+  drawerEl.querySelector("#share-fallback")?.remove();
+  const box = document.createElement("div");
+  box.id = "share-fallback";
+  const label = document.createElement("label");
+  label.htmlFor = "share-fallback-url";
+  label.textContent = "the clipboard refused — copy this link by hand:";
+  const field = document.createElement("textarea");
+  field.id = "share-fallback-url";
+  field.readOnly = true;
+  field.rows = 3;
+  field.spellcheck = false;
+  field.value = url;
+  box.append(label, field);
+  const button = drawerEl.querySelector("#share-garden");
+  if (button) button.after(box);
+  else drawerEl.prepend(box);
+  field.focus();
+  field.select();
 }
 
 function renderDrawer(): void {
@@ -1340,18 +1437,23 @@ function renderDrawer(): void {
   drawerEl.hidden = false;
   if (retirementLog.length === 0) {
     drawerEl.innerHTML =
+      shareRow +
       '<p class="empty">nothing retired yet — plant over a flower and it will keep here</p>';
+    wireShareButton();
     return;
   }
-  drawerEl.innerHTML = retirementLog
-    .map(
-      (e) =>
-        `<figure data-code="${esc(e.g)}" tabindex="0">` +
-        `<canvas width="192" height="168"></canvas>` +
-        `<figcaption>${esc(shortLabel(e.g))}</figcaption></figure>`,
-    )
-    .reverse()
-    .join("");
+  drawerEl.innerHTML =
+    shareRow +
+    retirementLog
+      .map(
+        (e) =>
+          `<figure data-code="${esc(e.g)}" tabindex="0">` +
+          `<canvas width="192" height="168"></canvas>` +
+          `<figcaption>${esc(shortLabel(e.g))}</figcaption></figure>`,
+      )
+      .reverse()
+      .join("");
+  wireShareButton();
 
   // Painted LAZILY, and once each. Growing and painting 200 plants the moment the drawer opens
   // would stall the frame; growing the eight actually on screen does not. Each figure is
@@ -1480,53 +1582,6 @@ function recordGrownPlants(): void {
 }
 
 /**
- * Draw a living plant, bending.
- *
- * The sway is a canvas transform wrapped around the ordinary paint call, so `paintPlant` knows
- * nothing about it and every part of the plant — stems, leaves, flowers, and the gradients
- * inside them — bends together for the cost of one matrix. It also means the plant a
- * retirement composites into the background is the RESTING one: `forest.retire` calls
- * `paintPlant` directly, so a plant cannot be frozen into the picture mid-lean.
- *
- * Stiffness comes from the phenotype, so a weeping plant moves like one.
- */
-function paintSwaying(
-  occ: Garden["plots"][number]["occupant"],
-  plotIndex: number,
-): void {
-  if (!occ) return;
-  const base = occ.plant.segments[0];
-  const k = base
-    ? swayAt(now, genomeSeed(occ.genome), base.x0, W, {
-        stiffness: express(occ.genome).stiffness,
-      })
-    : 0;
-  const d = bedDepth(plotIndex);
-  ctx.save();
-  if (base) {
-    // Depth first, then sway: the sway is a property of the plant, so it should be scaled by
-    // distance along with everything else rather than being applied at full size on top.
-    ctx.translate(base.x0, base.y0 + d.dy);
-    ctx.scale(d.scale, d.scale);
-    ctx.translate(-base.x0, -base.y0);
-    // Blended toward the ground, which dims and desaturates in one operation — the same cue
-    // the background forest uses, at a fraction of the strength.
-    ctx.globalAlpha = d.alpha;
-    applySway(ctx, k, base.y0);
-  }
-  // Cached once the plant has stopped changing. `maxTick` is when the last SEGMENT is drawn;
-  // flowers keep opening for a while after that, so the settle point is later than "grown".
-  paintPlantCached(
-    ctx,
-    occ.plant,
-    now - occ.plantedAt,
-    occ.maxTick + SETTLE_TICKS,
-    dpr,
-  );
-  ctx.restore();
-}
-
-/**
  * A canvas point in a given plot's own space.
  *
  * Every hit test goes through this, because every plant is DRAWN through the matching forward
@@ -1573,34 +1628,13 @@ function dropTarget(): number | null {
  */
 
 /**
- * The sky, painted once.
+ * The sky, painted once — held HERE and handed to `drawScene` every frame.
  *
- * `paintStage` is three full-canvas operations — a fill, a horizon gradient and a vignette —
- * and not one pixel of it changes between frames. Repainting it sixty times a second cost
- * roughly a fifth of the frame rate on a throttled phone: measured 20-26fps before the depth
- * work added the horizon and 16-19 after, on the same device.
- *
- * Same reasoning as the plant cache, and the same shape: if it cannot change, draw it once.
- * Invalidated only by a relayout, which is the one thing that changes its size.
+ * The renderer is stateless on purpose (see `src/scene.ts`), so the one thing in the scene that
+ * must survive between frames lives with the caller that owns the canvas. Invalidated only by a
+ * relayout, which is the one thing that changes its size.
  */
 let stageCache: HTMLCanvasElement | null = null;
-function drawStage(): void {
-  if (!stageCache) {
-    const c = document.createElement("canvas");
-    c.width = Math.max(1, Math.round(W * dpr));
-    c.height = Math.max(1, Math.round(H * dpr));
-    const g = c.getContext("2d");
-    if (!g) {
-      // Fail soft: a missing offscreen context should cost frame rate, not the sky.
-      paintStage(ctx, W, H, SOIL);
-      return;
-    }
-    g.scale(dpr, dpr);
-    paintStage(g, W, H, SOIL);
-    stageCache = c;
-  }
-  ctx.drawImage(stageCache, 0, 0, W, H);
-}
 
 function frame(): void {
   // Composite anything newly retired before drawing, so a replaced plant appears in the
@@ -1659,61 +1693,21 @@ function frame(): void {
   }
   syncA11y();
 
-  drawStage();
-  forest.draw(ctx);
-
-  // Between the background and the bed, which is exactly where a plant on its way from one to
-  // the other belongs.
-  for (const r of receding) {
-    const origin = r.plant.segments[0];
-    if (!origin) continue;
-    ctx.save();
-    applyPlacement(
-      ctx,
-      { x: origin.x0, y: origin.y0 },
-      lerpPlacement(r.place, (now - r.start) / RECEDE_TICKS),
-    );
-    // Blur ONE blit, not several hundred path fills.
-    //
-    // `applyPlacement` sets `ctx.filter = blur(...)`, and a canvas filter forces every
-    // subsequent drawing operation into its own layer to be blurred separately. Painting the
-    // plant as vectors under it cost 765ms per frame — measured — which dropped the whole
-    // garden to two frames a second for the length of the animation, and stopped the recede
-    // finishing at all. A receding plant has by definition finished growing, so it always has
-    // a cached picture; blurring that is one operation.
-    paintPlantCached(ctx, r.plant, Infinity, -Infinity, dpr);
-    ctx.restore();
-  }
-
-  // Furthest plot first, so a nearer plant paints OVER a further one. Without an order two
-  // overlapping plants interleave by array position and neither reads as being in front — which
-  // is what the bed did before it had any depth at all.
-  for (const i of paintOrder(garden.plots.length)) {
-    const occ = garden.plots[i]?.occupant;
-    if (occ) paintSwaying(occ, i);
-  }
-  paintSoil(ctx, W, H, SOIL);
-
-  // Contact shadows go on top of the SOIL, which is why they are here and not with the plants.
-  //
-  // Drawn before the plants they were invisible: `paintSoil` runs last so a stem's flat base is
-  // buried in the ground rather than stopping in mid-air, and it painted straight over every
-  // shadow. Measured 0.5 units of darkening under a stem against 0.4 without them — which is
-  // to say the feature was doing nothing at all.
-  //
-  // A separate pass rather than one per plant inside the loop above: each would otherwise land
-  // on top of the plant drawn before it, so a nearer plant's shadow would sit over a further
-  // plant's stem. Same reason the bloom halos are their own pass.
-  for (const i of paintOrder(garden.plots.length)) {
-    const occ = garden.plots[i]?.occupant;
-    const b = occ?.plant.segments[0];
-    if (!occ || !b) continue;
-    const d = bedDepth(i);
-    ctx.save();
-    ctx.globalAlpha = d.alpha;
-    paintContactShadow(ctx, b.x0, b.y0 + d.dy, b.w0 * d.scale);
-    ctx.restore();
-  }
+  // The whole picture, in one call — the same call a visit makes, so the two cannot drift.
+  // Both clocks are `now` here: the game grows and moves together. A visit pins the first.
+  stageCache = drawScene({
+    ctx,
+    W,
+    H,
+    SOIL,
+    dpr,
+    forest,
+    occupants: garden.plots.map((p) => p.occupant),
+    receding,
+    now,
+    motionNow: now,
+    stageCache,
+  });
 
   // AFTER the soil, not before. Drawn first, every divot was painted over by the soil band
   // and the empty plots looked identical to bare ground — so the one affordance telling the
@@ -1967,6 +1961,8 @@ requestAnimationFrame(frame);
  */
 Object.assign(window as unknown as Record<string, unknown>, {
   __ready: true,
+  /** The packed garden code, for a driver to compare against what the share button copies. */
+  __gardenCode: () => gardenPostcard(),
   __seek: (t: number) => {
     now = t;
   },

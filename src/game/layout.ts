@@ -93,13 +93,37 @@ export function plotPositions(W: number, plots: number): number[] {
   );
 }
 
-export function computeLayout(viewportW: number, viewportH: number): Layout {
-  // Margins: a little breathing room horizontally, and a line for the HUD.
-  const availW = Math.max(320, viewportW - 16);
-  const availH = Math.max(320, viewportH - 70);
+/**
+ * How much room a page actually has, before any clamping: the viewport less the chrome.
+ *
+ * Split out of `computeLayout` because the two questions it used to answer inside one function
+ * are genuinely different, and a VISIT needs the first without the second. `computeLayout` goes
+ * on to clamp H to [MIN_H, MAX_H] — a WORLD height, deliberately floored at 430 so a short
+ * screen gets letterboxing rather than a world made of sky. Read back as an AVAILABLE height
+ * that number clips: the visit fitted a 470-tall world into `box.H` and, at a 1180x400 phone in
+ * landscape, produced a 430px canvas inside 400px of `overflow: hidden` — about 15px lost off
+ * the top and the bottom.
+ *
+ * Margins: a little breathing room horizontally, and a line for the HUD (the visit's strip sits
+ * in the same band). The `Math.max(320, …)` floors that used to be here are gone: MIN_W is 360
+ * and MIN_H is 430, so `clamp` below swallowed them whole and they never changed an answer —
+ * but as an available box they would be a lie about a small window.
+ */
+export function availableBox(
+  viewportW: number,
+  viewportH: number,
+): { W: number; H: number } {
+  return {
+    W: Math.max(1, viewportW - 16),
+    H: Math.max(1, viewportH - 70),
+  };
+}
 
-  const W = Math.round(clamp(availW, MIN_W, MAX_W));
-  const H = Math.round(clamp(availH, MIN_H, MAX_H));
+export function computeLayout(viewportW: number, viewportH: number): Layout {
+  const avail = availableBox(viewportW, viewportH);
+
+  const W = Math.round(clamp(avail.W, MIN_W, MAX_W));
+  const H = Math.round(clamp(avail.H, MIN_H, MAX_H));
 
   // The plot COUNT comes from the local viewport; where those plots go is `plotPositions`.
   // Splitting the two is what lets a visit keep the second and reject the first.

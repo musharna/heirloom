@@ -295,6 +295,52 @@ check(
   `${spoken.length} entries, ${shownOccupied} occupied / ${spokenEmpty} empty — e.g. ${JSON.stringify(spoken[0])}`,
 );
 
+// ── THE WHOLE PHOTOGRAPH IS ON SCREEN ────────────────────────────────────────────────────────
+//
+// A visit letterboxes by design, and `body { overflow: hidden }` means anything that does not
+// fit is simply gone — silently, with no scrollbar to hint at it. The fit used `computeLayout`'s
+// H, which is a WORLD height clamped to MIN_H = 430 so a short screen gets sky rather than a
+// squashed world. Read back as an AVAILABLE height it clips: 470 of world into 430 of "room" put
+// a 430px canvas inside a 400px window and lost ~15px off the top and the bottom, taking the
+// canopy with it. Phone landscape is a real case here — the garden page's `#rotate` asks for it.
+//
+// Short landscape viewports specifically, because every viewport the suite already used is tall
+// enough for the floor to be invisible.
+{
+  const shortly = await browser.newContext({ viewport: { width: 1180, height: 400 } });
+  const s = await shortly.newPage();
+  watch(s);
+  await openVisit(s, `#garden=${code}`);
+  for (const [w, h] of [
+    [1180, 400],
+    [863, 360],
+    [740, 340],
+  ]) {
+    await s.setViewportSize({ width: w, height: h });
+    await settle(s);
+    const m = await s.evaluate(() => {
+      const c = document.getElementById("c").getBoundingClientRect();
+      return {
+        w: Math.round(c.width),
+        h: Math.round(c.height),
+        vw: innerWidth,
+        vh: innerHeight,
+      };
+    });
+    check(
+      `CONTROL: ${w}x${h} drew a canvas with size`,
+      m.w > 0 && m.h > 0,
+      `${m.w}x${m.h}`,
+    );
+    check(
+      `the whole visit fits inside a ${w}x${h} window — nothing clipped away`,
+      m.h <= m.vh && m.w <= m.vw,
+      `canvas ${m.w}x${m.h} in ${m.vw}x${m.vh}${m.h > m.vh ? ` — ${m.h - m.vh}px TALLER than the window` : ""}`,
+    );
+  }
+  await shortly.close();
+}
+
 // ── FAILURE IS NAMED ─────────────────────────────────────────────────────────────────────────
 await openVisit(b, "#garden=notarealgarden");
 const err = await b.evaluate(() => window.__visitError());

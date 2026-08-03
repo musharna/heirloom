@@ -13,7 +13,7 @@
  */
 import { grow } from "../src/game/garden";
 import { plotLabel } from "../src/game/describe";
-import { computeLayout, plotPositions, SOIL_BAND } from "../src/game/layout";
+import { availableBox, plotPositions, SOIL_BAND } from "../src/game/layout";
 import {
   FROZEN_CLOCK,
   readPostcard,
@@ -112,9 +112,13 @@ const SOIL = H - SOIL_BAND;
 const dpr = Math.min(2, window.devicePixelRatio || 1);
 
 function fit(): void {
-  // `computeLayout` measures the VISITOR's available box — its margins are the only part of it
-  // a visit wants. Its plot count and its world size belong to the visitor's own garden.
-  const box = computeLayout(window.innerWidth, window.innerHeight);
+  // `availableBox`, not `computeLayout`. Both were the visitor's margins, but `computeLayout`
+  // goes on to clamp its H to MIN_H = 430 — a WORLD height, floored so a short screen gets
+  // letterboxing rather than a world made of sky. Read back as an AVAILABLE height it clips: at
+  // a 1180x400 phone in landscape this fitted the 470-tall world into 430px and put a 430px
+  // canvas inside 400px of `overflow: hidden`, losing about 15px off the top and the bottom.
+  // Phone landscape is a real case for this game — `#rotate` on the garden page asks for it.
+  const box = availableBox(window.innerWidth, window.innerHeight);
   const scale = Math.min(box.W / W, box.H / H);
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);

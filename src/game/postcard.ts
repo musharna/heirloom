@@ -9,7 +9,15 @@ import {
   readGenomeBits,
   writeGenomeBits,
 } from "../genome/serialize";
-import { BACKGROUND_REPLAY, MAX_PLOTS, MIN_PLOTS } from "./layout";
+import {
+  BACKGROUND_REPLAY,
+  MAX_H,
+  MAX_PLOTS,
+  MAX_W,
+  MIN_H,
+  MIN_PLOTS,
+  MIN_W,
+} from "./layout";
 
 /**
  * A whole garden, packed for a URL fragment.
@@ -177,6 +185,25 @@ export function readPostcard(s: string): PostcardResult {
   if (bad) return { ok: false, error: bad };
   const W = read16();
   const H = read16();
+  // The world size is checked against the LAYOUT's own bounds, the same way the plot count is
+  // checked against MIN_PLOTS/MAX_PLOTS below. It was not, and it was the only field here taken
+  // on trust — which matters because `checksumOf` is exported and ships in the bundle, so the
+  // checksum proves a code is uncorrupted, never that it is honest.
+  //
+  // Both ends are hostile and neither said anything. 65535 reaches `new Forest(65535, 65535, 2)`
+  // — a 131070x131070 backing store, past every browser's canvas limit — and the visitor gets a
+  // blank page or a hung tab. 0 makes the fit scale infinite and the canvas zero pixels wide:
+  // also a blank page. §10 says a failure names itself; a blank tab names nothing.
+  if (W < MIN_W || W > MAX_W)
+    return {
+      ok: false,
+      error: `garden claims a world ${W} wide (must be ${MIN_W} to ${MAX_W})`,
+    };
+  if (H < MIN_H || H > MAX_H)
+    return {
+      ok: false,
+      error: `garden claims a world ${H} tall (must be ${MIN_H} to ${MAX_H})`,
+    };
   const plotCount = bytes[at++]!;
   if (plotCount > MAX_PLOTS)
     return {

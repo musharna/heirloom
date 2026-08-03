@@ -12,8 +12,12 @@ import {
 import { mulberry32 } from "../src/rng";
 import {
   BACKGROUND_REPLAY,
+  MAX_H,
   MAX_PLOTS,
+  MAX_W,
+  MIN_H,
   MIN_PLOTS,
+  MIN_W,
   computeLayout,
 } from "../src/game/layout";
 import {
@@ -47,6 +51,22 @@ function genomeBytes(): number[] {
   writeGenomeBits(w, randomGenome(rand));
   return Array.from(w.bytes);
 }
+
+/**
+ * A legal header for a hand-built postcard: version, then a world the decoder accepts.
+ *
+ * Derived from MAX_W/MAX_H rather than written out. These fixtures used `100, 0, 100, 0` as
+ * filler, on the reasoning that they were testing the plot count or the forest cap and the world
+ * did not matter. It does now — 100 is below MIN_W — and four tests started reporting a width
+ * error instead of the thing they were asserting. Filler that is not legal input is a fixture
+ * waiting to test the wrong rejection.
+ */
+const u16le = (v: number): number[] => [v & 0xff, (v >> 8) & 0xff];
+const header = (): number[] => [
+  POSTCARD_VERSION,
+  ...u16le(MAX_W),
+  ...u16le(MAX_H),
+];
 
 /**
  * Hand-build a postcard from raw body bytes (everything except the checksum) and append a
@@ -185,11 +205,7 @@ describe("the postcard codec", () => {
     // short" floor (9 bytes) but far short of the full record, so this exercises need()'s
     // bed-loop call specifically, not the length floor.
     const body = [
-      POSTCARD_VERSION,
-      100,
-      0, // W = 100
-      100,
-      0, // H = 100
+      ...header(),
       3, // plotCount
       1, // occupied count
       0, // plot index
@@ -204,7 +220,7 @@ describe("the postcard codec", () => {
   });
 
   it("names the bed size when plotCount exceeds the maximum", () => {
-    const body = [POSTCARD_VERSION, 100, 0, 100, 0, 200, 0, 0];
+    const body = [...header(), 200, 0, 0];
     const r = readPostcard(encode(body));
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -212,7 +228,7 @@ describe("the postcard codec", () => {
   });
 
   it("rejects a plotCount of 0 rather than decoding an ok bedless garden", () => {
-    const body = [POSTCARD_VERSION, 100, 0, 100, 0, 0, 0, 0];
+    const body = [...header(), 0, 0, 0];
     const r = readPostcard(encode(body));
     expect(r.ok).toBe(false);
     if (r.ok) return;
@@ -230,11 +246,7 @@ describe("the postcard codec", () => {
     const entries: number[] = [];
     for (let i = 0; i < forestCount; i++) entries.push(...g, 0, 0);
     const body = [
-      POSTCARD_VERSION,
-      100,
-      0, // W
-      100,
-      0, // H
+      ...header(),
       2, // plotCount
       0, // occupied count
       forestCount,
@@ -287,5 +299,85 @@ describe("the postcard codec", () => {
     expect(r.postcard.forest.map((f) => serialize(f.genome))).toEqual(
       p.forest.map((f) => serialize(f.genome)),
     );
+  });
+});
+
+/**
+ * W AND H WERE THE ONLY FIELDS THE DECODER TOOK ON TRUST.
+ *
+ * `plotCount` is checked against MIN_PLOTS/MAX_PLOTS and the forest count against
+ * BACKGROUND_REPLAY, but the two world dimensions were read as raw u16 and handed straight to
+ * the page. `checksumOf` is exported and ships in the bundle, so a valid code is forgeable by
+ * anyone — the checksum catches corruption, never a lie.
+ *
+ * Both ends are hostile in their own way, and neither says anything:
+ *
+ *   - 65535 reaches `new Forest(65535, 65535, 2)`, a 131070x131070 backing store, past every
+ *     browser's canvas limit. The allocation fails and the visitor gets a blank page or a hung
+ *     tab.
+ *   - 0 makes `Math.min(box.W / W, box.H / H)` infinite and the canvas zero pixels wide. Also a
+ *     blank page.
+ *
+ * §10 says a failure names itself. A blank tab names nothing.
+ *
+ * These are built with `packPostcard` rather than by hand: `u16` clamps only to [0, MAX_AGE], so
+ * the encoder emits both of these happily, which is the point — the forgery does not even need
+ * a bit-twiddler.
+ */
+describe("the world a garden code claims", () => {
+  const withSize = (W: number, H: number): Postcard => ({
+    ...sample(MIN_PLOTS, 0),
+    W,
+    H,
+  });
+  const errorFor = (W: number, H: number): string | null => {
+    const r = readPostcard(packPostcard(withSize(W, H)));
+    return r.ok ? null : r.error;
+  };
+
+  it("CONTROL: the layout's own bounds decode, at both ends", () => {
+    // Without this the four rejections below would pass just as well against a decoder that
+    // rejected EVERY postcard, which is the shape a bounds check is most likely to have wrong.
+    for (const [W, H] of [
+      [MIN_W, MIN_H],
+      [MAX_W, MAX_H],
+      [computeLayout(1280, 720).W, computeLayout(1280, 720).H],
+    ] as const) {
+      const r = readPostcard(packPostcard(withSize(W, H)));
+      expect(r.ok, `${W}x${H} should decode`).toBe(true);
+      if (!r.ok) continue;
+      expect(r.postcard.W).toBe(W);
+      expect(r.postcard.H).toBe(H);
+    }
+  });
+
+  it.each([
+    ["a zero width", 0, MAX_H],
+    ["a width past the widest world", 0xffff, MAX_H],
+    ["a width one below the narrowest", MIN_W - 1, MAX_H],
+    ["a width one above the widest", MAX_W + 1, MAX_H],
+  ])("rejects %s, by name", (_label, W, H) => {
+    const error = errorFor(W, H);
+    expect(error).toBeTruthy();
+    // Named, not merely refused: the message has to carry the offending number and the bound
+    // it broke, or the player is told "that link is bad" and learns nothing.
+    expect(error).toContain(String(W));
+    expect(error).toMatch(/wide|width/);
+  });
+
+  it.each([
+    ["a zero height", MAX_W, 0],
+    ["a height past the tallest world", MAX_W, 0xffff],
+    ["a height one below the shortest", MAX_W, MIN_H - 1],
+    ["a height one above the tallest", MAX_W, MAX_H + 1],
+  ])("rejects %s, by name", (_label, W, H) => {
+    const error = errorFor(W, H);
+    expect(error).toBeTruthy();
+    expect(error).toContain(String(H));
+    expect(error).toMatch(/tall|high|height/);
+  });
+
+  it("names the WIDTH when both are wrong — the first thing read is the first thing reported", () => {
+    expect(errorFor(0xffff, 0xffff)).toContain("65535");
   });
 });

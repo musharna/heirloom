@@ -1371,12 +1371,52 @@ function wireShareButton(): void {
         }, 3200);
       })
       .catch((e: Error) => {
-        // Clipboard access is permission-gated and fails in plenty of contexts. Fold the URL
-        // into the notice, the same fallback the tray's share code already uses (above).
-        notice = `could not copy (${e.message}) — ${url}`;
+        // Clipboard access is permission-gated and fails in plenty of contexts, so the fallback
+        // is the only way the player gets their link. It is NOT the tray's fallback, which folds
+        // the URL into `notice`: `#hint` is one line, `nowrap`, `overflow: hidden`,
+        // `text-overflow: ellipsis`. The tray's payload is 14 characters and survives that; a
+        // garden link is around a thousand and arrives as an ellipsis. The player was shown a
+        // truncated URL and had no way to recover the rest of it.
+        notice = `could not copy (${e.message}) — the link is in the drawer; select it and copy it by hand`;
         announce(notice);
+        showShareFallback(url);
       });
   });
+}
+
+/**
+ * The link itself, in something the player can select.
+ *
+ * A textarea rather than a `<p>`: it wraps, it scrolls, and a triple-click or ctrl-A inside it
+ * selects exactly the URL and nothing else. Read-only rather than disabled — a disabled field
+ * is not selectable and is skipped by keyboard navigation, which would leave a keyboard-only
+ * player exactly where the ellipsis did.
+ *
+ * Focused and pre-selected, so for most players "copy by hand" is one keystroke.
+ *
+ * Lives in the drawer, next to the button that produced it. `renderDrawer` rewrites the drawer
+ * wholesale on open and close, which clears this — correct, because a stale link to a garden
+ * that has since changed is worse than no link.
+ */
+function showShareFallback(url: string): void {
+  drawerEl.querySelector("#share-fallback")?.remove();
+  const box = document.createElement("div");
+  box.id = "share-fallback";
+  const label = document.createElement("label");
+  label.htmlFor = "share-fallback-url";
+  label.textContent = "the clipboard refused — copy this link by hand:";
+  const field = document.createElement("textarea");
+  field.id = "share-fallback-url";
+  field.readOnly = true;
+  field.rows = 3;
+  field.spellcheck = false;
+  field.value = url;
+  box.append(label, field);
+  const button = drawerEl.querySelector("#share-garden");
+  if (button) button.after(box);
+  else drawerEl.prepend(box);
+  field.focus();
+  field.select();
 }
 
 function renderDrawer(): void {

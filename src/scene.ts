@@ -34,8 +34,38 @@ import type { Plant } from "./types";
  *
  * Comfortably past OPEN_TICKS, because a flower that was still opening when its image was
  * cached would stay half-open for as long as the plant stands there.
+ *
+ * EXPORTED, and every "is it finished yet" question goes through the two functions below.
+ * It was private, and the garden's share code re-derived "finished" as `maxTick` — which is
+ * when the last SEGMENT is drawn, not when the last flower has opened. A shared garden then
+ * carried an age at which its terminal blooms were 32% open, and the visitor was shown
+ * different flowers from the ones that were sent. One definition, or this happens again.
  */
-const SETTLE_TICKS = 40;
+export const SETTLE_TICKS = 40;
+
+/**
+ * The tick after which a plant never changes again.
+ *
+ * `maxTick` is NOT that tick. A shoot's terminal flower is created on the tick that shoot stops
+ * growing — whether it runs out of width or vigour mid-run (`src/growth/sim.ts:418`) or is
+ * still alive when the clock ends (`:426`) — so the LAST shoot standing puts a flower at
+ * `maxTick` itself, and that flower then takes OPEN_TICKS more to open
+ * (`src/render/stage.ts`). Measured across twelve random genomes: eleven finish with a flower
+ * at `maxTick`. A plant is still visibly changing well after its last segment is drawn.
+ */
+export const settledTick = (maxTick: number): number => maxTick + SETTLE_TICKS;
+
+/**
+ * The age a postcard should carry for a plant of this age.
+ *
+ * Capped, so a garden left open overnight sends the same picture as one shared the moment it
+ * finished — but capped at the SETTLE point, not at `maxTick`. Below the settle point the
+ * receiving page is drawing a plant that is still opening: its flowers render part-open, and
+ * `paintPlantCached` refuses to cache a moving target, so the visit also pays full vector
+ * paint every frame forever.
+ */
+export const sharedAge = (age: number, maxTick: number): number =>
+  Math.min(age, settledTick(maxTick));
 
 export type SceneOccupant = {
   genome: Genome;
@@ -105,7 +135,7 @@ function paintSwaying(s: Scene, occ: SceneOccupant, plotIndex: number): void {
     s.ctx,
     occ.plant,
     s.now - occ.plantedAt,
-    occ.maxTick + SETTLE_TICKS,
+    settledTick(occ.maxTick),
     s.dpr,
   );
   s.ctx.restore();

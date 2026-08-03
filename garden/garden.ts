@@ -82,7 +82,7 @@ import { placeRetired, type Placement } from "../src/render/forest";
 import { bedDepth, toCanvasSpace, toPlotSpace } from "../src/render/bed";
 import { mulberry32 } from "../src/rng";
 import { PALETTE, paintPlant } from "../src/render/stage";
-import { drawScene } from "../src/scene";
+import { drawScene, sharedAge } from "../src/scene";
 import type { Plant, Vec2 } from "../src/types";
 
 /**
@@ -1306,10 +1306,12 @@ function gardenPostcard(): string {
       p.occupant
         ? {
             genome: p.occupant.genome,
-            // Clamped here too (packPostcard also clamps at pack time), so the intent is local:
-            // past maxTick nothing about the plant changes, so a garden left open overnight
-            // sends the same picture as one shared the moment it finished.
-            age: Math.min(now - p.occupant.plantedAt, p.occupant.maxTick),
+            // `sharedAge`, not a clamp written out here. This line used to cap the age at
+            // `maxTick` on the premise that "past maxTick nothing about the plant changes",
+            // and that premise is false: blooms are created AT tip termination and take
+            // OPEN_TICKS more to open, so a garden shared in full flower arrived with its
+            // terminal flowers 32% open and stayed that way. The rule has one home now.
+            age: sharedAge(now - p.occupant.plantedAt, p.occupant.maxTick),
           }
         : null,
     ),

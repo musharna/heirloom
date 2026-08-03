@@ -20,8 +20,26 @@ import { BACKGROUND_REPLAY, MAX_PLOTS, MIN_PLOTS } from "./layout";
  */
 export const POSTCARD_VERSION = 1;
 
-/** Ages are two bytes. Past `maxTick` a plant is finished, so the ceiling costs nothing. */
-const MAX_AGE = 0xffff;
+/**
+ * Ages are two bytes.
+ *
+ * A plant settles a few dozen ticks after its last segment (`settledTick`), and the share code
+ * caps what it sends there, so 65535 is orders of magnitude above anything a real postcard
+ * carries. It is the FORMAT's ceiling, not the game's — a forged code may claim any of it, and
+ * `FROZEN_CLOCK` below is what makes that harmless.
+ */
+export const MAX_AGE = 0xffff;
+
+/**
+ * The clock a visit pins its garden to: each plant is planted `age` ticks before it.
+ *
+ * Lives HERE, beside `MAX_AGE`, because the only thing that makes it correct is the relation
+ * between the two. A visit plants at `FROZEN_CLOCK - age`, so any age this codec can carry —
+ * including one a forged code invented — must be below it, or `plantedAt` goes negative and the
+ * plant reads as older than the world it is standing in. Two modules apart that relation is
+ * nobody's to check; here it is one assertion away.
+ */
+export const FROZEN_CLOCK = 100_000;
 
 /**
  * Upper bound on a postcard's raw byte length, computed from the format's own parts rather than

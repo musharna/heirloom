@@ -93,10 +93,18 @@ reflowing. It also preserves the bed-to-forest scale gap — bed 1.00-0.86 again
 `src/game/layout.ts:31`, which explicitly warns against buying plots by scaling plants down —
 that reflowing would distort.
 
-**Age is clamped to `maxTick` before packing.** The raw value is `now - plantedAt`
+**Age is clamped to the SETTLE point before packing.** The raw value is `now - plantedAt`
 (`src/game/garden.ts:244`) and grows without bound — a garden left open overnight would overflow
-two bytes and a plant would come back mid-growth on the far side. Past `maxTick` nothing about a
-plant changes, so clamping loses nothing and makes the field fixed-width.
+two bytes and a plant would come back mid-growth on the far side.
+
+The clamp is `settledTick(maxTick)` — `maxTick + SETTLE_TICKS`, one definition in `src/scene.ts`
+— and NOT `maxTick`. This paragraph used to say "past `maxTick` nothing about a plant changes,
+so clamping loses nothing", and that is false: `maxTick` is when the last SEGMENT is drawn, and
+a shoot's terminal flower is created on the tick that shoot stops growing, so the last shoot
+standing puts a flower at `maxTick` itself and that flower needs `OPEN_TICKS` more to open.
+Clamping to `maxTick` lost two things — the visitor saw the sender's terminal flowers frozen at
+32% open forever while the mirror said "finished", and `paintPlantCached` never engaged, because
+`untilTick < settledTick` on every frame of every visit.
 
 `GENOME_VERSION` is not reused. A garden code carries its own version, bumped when this layout
 changes, so an old link fails loudly instead of decoding to nonsense.
@@ -174,8 +182,10 @@ than by handling.
 ## Testing
 
 Unit tests over `postcard.ts`: every genome survives the round trip byte-exact, age clamps at
-`maxTick`, the forest caps at 60, a garden with an empty forest round-trips, a bare bed
-round-trips, and both a bad version byte and a bad checksum are rejected by name.
+`settledTick(maxTick)` (`test/settle.test.ts`, which also pins the falsifier — a grown plant
+HAS flowers created at `maxTick`), W and H are rejected outside the layout's own bounds, the
+forest caps at 60, a garden with an empty forest round-trips, a bare bed round-trips, and both
+a bad version byte and a bad checksum are rejected by name.
 
 Then `tools/drive-visit.mjs`, driving two browser contexts — a sender, and a visitor who
 **already has a different garden of their own**.

@@ -354,6 +354,105 @@ check(
     JSON.stringify(ownPlots),
 );
 
+// ── THE FLOWERS ARE THE ONES THAT WERE SENT ──────────────────────────────────────────────────
+//
+// Not "a garden arrived" — the SAME garden, in the same state of flower. A shared garden used to
+// arrive with its terminal flowers frozen at 32% open, permanently, and every check above passed:
+// the genomes matched, the plot count matched, the mirror said "finished", growth was pinned. The
+// only witness was the picture.
+//
+// Measured as PETAL AREA above the soil, so the seed tray and the plot markers are out of frame.
+// Petals are `hsl(h s l)` fills over a near-black sky and dark soil, so "saturated and not dark"
+// isolates them without a per-hue threshold; foliage is green but far duller. The SAME predicate
+// runs on both pages, so a badly-chosen threshold moves both readings together and cannot
+// manufacture a gap. The noise floor is measured rather than assumed — sway moves petals about,
+// and the sender is sampled twice to find out by how much.
+const petalArea = (page, worldW, soilY) =>
+  page.evaluate(
+    ({ w, soil }) => {
+      const c = document.getElementById("c");
+      const cut = Math.floor((soil * c.width) / w);
+      const d = c.getContext("2d").getImageData(0, 0, c.width, cut).data;
+      let n = 0;
+      for (let i = 0; i < d.length; i += 4) {
+        const max = Math.max(d[i], d[i + 1], d[i + 2]);
+        const min = Math.min(d[i], d[i + 1], d[i + 2]);
+        if (max - min > 40 && max > 110) n++;
+      }
+      return n;
+    },
+    { w: worldW, soil: soilY },
+  );
+
+// Three samples of the sender, not one. A single reading carries whatever the sway phase was at
+// that instant: two readings of the same live garden came out 1.4% apart on one run and 0.03% on
+// another, so a threshold set against one sample is set against luck. The mean is the sender's
+// figure and the worst deviation from it is the noise floor the verdict is read against.
+const world = await a.evaluate(() => window.__size());
+const aboveSoil = world.h - 90;
+const senderSamples = [];
+for (let i = 0; i < 3; i++) {
+  if (i) await a.waitForTimeout(600);
+  senderSamples.push(await petalArea(a, world.w, aboveSoil));
+}
+const senderPetals =
+  senderSamples.reduce((s, v) => s + v, 0) / senderSamples.length;
+const swayNoise =
+  Math.max(...senderSamples.map((v) => Math.abs(v - senderPetals))) /
+  Math.max(1, senderPetals);
+
+const flowers = await browser.newContext({
+  viewport: { width: 1280, height: 720 },
+});
+const f = await flowers.newPage();
+watch(f);
+await openVisit(f, `#garden=${code}`);
+await settle(f);
+const visitPetals = await petalArea(f, world.w, aboveSoil);
+const gap = Math.abs(visitPetals - senderPetals) / Math.max(1, senderPetals);
+
+check(
+  "CONTROL: both pages drew flowers — an all-black canvas cannot fail this",
+  senderPetals > 2000 && visitPetals > 2000,
+  `sender ${senderPetals.toFixed(0)}px, visit ${visitPetals}px`,
+);
+check(
+  "CONTROL: and sway alone barely moves the measurement",
+  swayNoise < 0.03,
+  `${(swayNoise * 100).toFixed(2)}% across three readings of the SAME live garden — ${senderSamples.join("/")}`,
+);
+// 5%, against a defect measured at 7-11% and a noise floor measured at 0.03-1.4%. Not a tuned
+// number: the two populations are an order of magnitude apart and this sits between them.
+//
+// ABSOLUTE difference, and that is not fastidiousness. Half-open flowers are smaller, but the
+// renderer culls a bloom sitting closer than 0.62 of a radius to its neighbour, so shrinking
+// every radius also spares blooms that would have been culled. Measured across runs the defect
+// went both ways — 10.9% BELOW the sender on one, 10.0% ABOVE on another. A signed check would
+// have passed half the time.
+check(
+  "the visit's flowers are as open as the sender's — the same picture, not a younger one",
+  gap < 0.05,
+  `${(gap * 100).toFixed(1)}% apart (${visitPetals} vs ${senderPetals.toFixed(0)}), against a ${(swayNoise * 100).toFixed(2)}% noise floor`,
+);
+
+// And the plant cache actually engages. A visit's clock NEVER advances, so an age below the
+// settle point locks `paintPlantCached` out of its cache on every frame forever — the exact
+// 11fps regression `src/render/cache.ts` was written to fix, invisible to every other check
+// here. Frames are given time first: the cache fills on the first paint past the settle point.
+await f.waitForTimeout(400);
+const cache = await f.evaluate(() => window.__visitCached());
+check(
+  "CONTROL: the visit has plants that could be cached",
+  cache.of > 0,
+  `${cache.of} occupied plots`,
+);
+check(
+  "and every one of them is being blitted from cache, not re-painted every frame",
+  cache.cached === cache.of,
+  `${cache.cached} of ${cache.of} cached`,
+);
+await flowers.close();
+
 // ── GROWTH IS PINNED ─────────────────────────────────────────────────────────────────────────
 //
 // Measured in PIXELS, because no hook can see this. `__visitPlots()` returns serialized genomes

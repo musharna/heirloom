@@ -14,9 +14,14 @@
 import { grow } from "../src/game/garden";
 import { plotLabel } from "../src/game/describe";
 import { computeLayout, plotPositions, SOIL_BAND } from "../src/game/layout";
-import { readPostcard, type Postcard } from "../src/game/postcard";
+import {
+  FROZEN_CLOCK,
+  readPostcard,
+  type Postcard,
+} from "../src/game/postcard";
 import { genomeSeed, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
+import { cachedCount } from "../src/render/cache";
 import { SPEED } from "../src/render/motion";
 import { drawScene, type SceneOccupant } from "../src/scene";
 
@@ -87,10 +92,10 @@ function fit(): void {
  * The growth clock is PINNED.
  *
  * Each plant is grown to the age it had when the link was made, by planting it that many ticks
- * in the past against a clock that never advances. Large enough that no plausible age pushes a
- * `plantedAt` negative, which would read as a plant older than the world.
+ * in the past against a clock that never advances. The value lives with the codec, next to the
+ * age ceiling it has to clear — see `FROZEN_CLOCK`.
  */
-const FROZEN = 100_000;
+const FROZEN = FROZEN_CLOCK;
 
 const forest = new Forest(W, H, dpr);
 for (const entry of postcard?.forest ?? [])
@@ -156,9 +161,23 @@ declare global {
     __visitReady?: boolean;
     __visitPlots?: () => (string | null)[];
     __visitError?: () => string | null;
+    __visitCached?: () => { cached: number; of: number };
   }
 }
 window.__visitPlots = () =>
   occupants.map((o) => (o ? serialize(o.genome) : null));
 window.__visitError = () => failure;
+/**
+ * How many of the visited plants are being blitted from a cached image.
+ *
+ * Exposed because a visit is the ONE page where this can silently be zero forever. The garden's
+ * clock advances past `settledTick` within a second of a plant finishing; a visit's clock never
+ * advances at all, so if the age it was sent is below the settle point the cache can never
+ * engage — not once, not later. That was the shipped behaviour, and nothing on the page said
+ * so except the frame rate.
+ */
+window.__visitCached = () => ({
+  cached: cachedCount(occupants.flatMap((o) => (o ? [o.plant] : []))),
+  of: occupants.filter(Boolean).length,
+});
 window.__visitReady = true;

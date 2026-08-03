@@ -500,8 +500,15 @@ import { BACKGROUND_REPLAY, MAX_PLOTS } from "./layout";
  */
 export const POSTCARD_VERSION = 1;
 
-/** Ages are two bytes. Past `maxTick` a plant is finished, so the ceiling costs nothing. */
-const MAX_AGE = 0xffff;
+/**
+ * Ages are two bytes.
+ *
+ * CORRECTED after implementation. This said "past `maxTick` a plant is finished", which is
+ * false — see the note on the share code below. The ceiling is the FORMAT's, and what makes it
+ * harmless is that it sits under `FROZEN_CLOCK`, which now lives beside it.
+ */
+export const MAX_AGE = 0xffff;
+export const FROZEN_CLOCK = 100_000;
 
 export type PostcardPlot = { genome: Genome; age: number };
 
@@ -1136,10 +1143,14 @@ function gardenPostcard(): string {
       p.occupant
         ? {
             genome: p.occupant.genome,
-            // Clamped at pack time too, but clamping here keeps the intent local: past maxTick
-            // nothing about the plant changes, so a garden left open overnight sends the same
-            // picture as one shared the moment it finished.
-            age: Math.min(now - p.occupant.plantedAt, p.occupant.maxTick),
+            // CORRECTED after implementation. This planned `Math.min(age, maxTick)` on the
+            // premise that "past maxTick nothing about the plant changes". That premise is
+            // false: a shoot's terminal flower is created on the tick that shoot stops
+            // growing, so a finished plant has flowers AT maxTick that need OPEN_TICKS more
+            // to open. Clamping there shipped a visit whose terminal flowers were 32% open
+            // forever, and whose plant cache could never engage. The rule has one home now —
+            // `sharedAge` in src/scene.ts, beside the SETTLE_TICKS it is derived from.
+            age: sharedAge(now - p.occupant.plantedAt, p.occupant.maxTick),
           }
         : null,
     ),

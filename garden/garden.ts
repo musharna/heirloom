@@ -75,43 +75,17 @@ import {
 import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
-import { paintPlantCached } from "../src/render/cache";
 import { paintThumb } from "../src/render/thumb";
-import {
-  RECEDE_TICKS,
-  applyPlacement,
-  applySway,
-  lerpPlacement,
-  swayAt,
-} from "../src/render/motion";
+import { RECEDE_TICKS } from "../src/render/motion";
 import { placeRetired, type Placement } from "../src/render/forest";
-import {
-  bedDepth,
-  paintOrder,
-  toCanvasSpace,
-  toPlotSpace,
-} from "../src/render/bed";
-import { express } from "../src/genome/express";
+import { bedDepth, toCanvasSpace, toPlotSpace } from "../src/render/bed";
 import { mulberry32 } from "../src/rng";
-import {
-  PALETTE,
-  paintPlant,
-  paintContactShadow,
-  paintSoil,
-  paintStage,
-} from "../src/render/stage";
+import { PALETTE, paintPlant } from "../src/render/stage";
+import { drawScene } from "../src/scene";
 import type { Plant, Vec2 } from "../src/types";
 
 /** Ticks per frame. Unhurried without being tedious. */
 const SPEED = 1.4;
-
-/**
- * Ticks after a plant's last segment before it is treated as finished.
- *
- * Comfortably past OPEN_TICKS, because a flower that was still opening when its image was
- * cached would stay half-open for as long as the plant stands there.
- */
-const SETTLE_TICKS = 40;
 
 /**
  * World geometry, from the viewport. Reassignable rather than constant: a phone rotated to
@@ -1484,53 +1458,6 @@ function recordGrownPlants(): void {
 }
 
 /**
- * Draw a living plant, bending.
- *
- * The sway is a canvas transform wrapped around the ordinary paint call, so `paintPlant` knows
- * nothing about it and every part of the plant — stems, leaves, flowers, and the gradients
- * inside them — bends together for the cost of one matrix. It also means the plant a
- * retirement composites into the background is the RESTING one: `forest.retire` calls
- * `paintPlant` directly, so a plant cannot be frozen into the picture mid-lean.
- *
- * Stiffness comes from the phenotype, so a weeping plant moves like one.
- */
-function paintSwaying(
-  occ: Garden["plots"][number]["occupant"],
-  plotIndex: number,
-): void {
-  if (!occ) return;
-  const base = occ.plant.segments[0];
-  const k = base
-    ? swayAt(now, genomeSeed(occ.genome), base.x0, W, {
-        stiffness: express(occ.genome).stiffness,
-      })
-    : 0;
-  const d = bedDepth(plotIndex);
-  ctx.save();
-  if (base) {
-    // Depth first, then sway: the sway is a property of the plant, so it should be scaled by
-    // distance along with everything else rather than being applied at full size on top.
-    ctx.translate(base.x0, base.y0 + d.dy);
-    ctx.scale(d.scale, d.scale);
-    ctx.translate(-base.x0, -base.y0);
-    // Blended toward the ground, which dims and desaturates in one operation — the same cue
-    // the background forest uses, at a fraction of the strength.
-    ctx.globalAlpha = d.alpha;
-    applySway(ctx, k, base.y0);
-  }
-  // Cached once the plant has stopped changing. `maxTick` is when the last SEGMENT is drawn;
-  // flowers keep opening for a while after that, so the settle point is later than "grown".
-  paintPlantCached(
-    ctx,
-    occ.plant,
-    now - occ.plantedAt,
-    occ.maxTick + SETTLE_TICKS,
-    dpr,
-  );
-  ctx.restore();
-}
-
-/**
  * A canvas point in a given plot's own space.
  *
  * Every hit test goes through this, because every plant is DRAWN through the matching forward
@@ -1577,34 +1504,13 @@ function dropTarget(): number | null {
  */
 
 /**
- * The sky, painted once.
+ * The sky, painted once — held HERE and handed to `drawScene` every frame.
  *
- * `paintStage` is three full-canvas operations — a fill, a horizon gradient and a vignette —
- * and not one pixel of it changes between frames. Repainting it sixty times a second cost
- * roughly a fifth of the frame rate on a throttled phone: measured 20-26fps before the depth
- * work added the horizon and 16-19 after, on the same device.
- *
- * Same reasoning as the plant cache, and the same shape: if it cannot change, draw it once.
- * Invalidated only by a relayout, which is the one thing that changes its size.
+ * The renderer is stateless on purpose (see `src/scene.ts`), so the one thing in the scene that
+ * must survive between frames lives with the caller that owns the canvas. Invalidated only by a
+ * relayout, which is the one thing that changes its size.
  */
 let stageCache: HTMLCanvasElement | null = null;
-function drawStage(): void {
-  if (!stageCache) {
-    const c = document.createElement("canvas");
-    c.width = Math.max(1, Math.round(W * dpr));
-    c.height = Math.max(1, Math.round(H * dpr));
-    const g = c.getContext("2d");
-    if (!g) {
-      // Fail soft: a missing offscreen context should cost frame rate, not the sky.
-      paintStage(ctx, W, H, SOIL);
-      return;
-    }
-    g.scale(dpr, dpr);
-    paintStage(g, W, H, SOIL);
-    stageCache = c;
-  }
-  ctx.drawImage(stageCache, 0, 0, W, H);
-}
 
 function frame(): void {
   // Composite anything newly retired before drawing, so a replaced plant appears in the
@@ -1663,61 +1569,21 @@ function frame(): void {
   }
   syncA11y();
 
-  drawStage();
-  forest.draw(ctx);
-
-  // Between the background and the bed, which is exactly where a plant on its way from one to
-  // the other belongs.
-  for (const r of receding) {
-    const origin = r.plant.segments[0];
-    if (!origin) continue;
-    ctx.save();
-    applyPlacement(
-      ctx,
-      { x: origin.x0, y: origin.y0 },
-      lerpPlacement(r.place, (now - r.start) / RECEDE_TICKS),
-    );
-    // Blur ONE blit, not several hundred path fills.
-    //
-    // `applyPlacement` sets `ctx.filter = blur(...)`, and a canvas filter forces every
-    // subsequent drawing operation into its own layer to be blurred separately. Painting the
-    // plant as vectors under it cost 765ms per frame — measured — which dropped the whole
-    // garden to two frames a second for the length of the animation, and stopped the recede
-    // finishing at all. A receding plant has by definition finished growing, so it always has
-    // a cached picture; blurring that is one operation.
-    paintPlantCached(ctx, r.plant, Infinity, -Infinity, dpr);
-    ctx.restore();
-  }
-
-  // Furthest plot first, so a nearer plant paints OVER a further one. Without an order two
-  // overlapping plants interleave by array position and neither reads as being in front — which
-  // is what the bed did before it had any depth at all.
-  for (const i of paintOrder(garden.plots.length)) {
-    const occ = garden.plots[i]?.occupant;
-    if (occ) paintSwaying(occ, i);
-  }
-  paintSoil(ctx, W, H, SOIL);
-
-  // Contact shadows go on top of the SOIL, which is why they are here and not with the plants.
-  //
-  // Drawn before the plants they were invisible: `paintSoil` runs last so a stem's flat base is
-  // buried in the ground rather than stopping in mid-air, and it painted straight over every
-  // shadow. Measured 0.5 units of darkening under a stem against 0.4 without them — which is
-  // to say the feature was doing nothing at all.
-  //
-  // A separate pass rather than one per plant inside the loop above: each would otherwise land
-  // on top of the plant drawn before it, so a nearer plant's shadow would sit over a further
-  // plant's stem. Same reason the bloom halos are their own pass.
-  for (const i of paintOrder(garden.plots.length)) {
-    const occ = garden.plots[i]?.occupant;
-    const b = occ?.plant.segments[0];
-    if (!occ || !b) continue;
-    const d = bedDepth(i);
-    ctx.save();
-    ctx.globalAlpha = d.alpha;
-    paintContactShadow(ctx, b.x0, b.y0 + d.dy, b.w0 * d.scale);
-    ctx.restore();
-  }
+  // The whole picture, in one call — the same call a visit makes, so the two cannot drift.
+  // Both clocks are `now` here: the game grows and moves together. A visit pins the first.
+  stageCache = drawScene({
+    ctx,
+    W,
+    H,
+    SOIL,
+    dpr,
+    forest,
+    occupants: garden.plots.map((p) => p.occupant),
+    receding,
+    now,
+    motionNow: now,
+    stageCache,
+  });
 
   // AFTER the soil, not before. Drawn first, every divot was painted over by the soil band
   // and the empty plots looked identical to bare ground — so the one affordance telling the

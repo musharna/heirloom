@@ -22,7 +22,7 @@ import {
 import { genomeSeed, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
 import { cachedCount } from "../src/render/cache";
-import { SPEED } from "../src/render/motion";
+import { MOTION_TICKS_PER_SECOND, ticksElapsed } from "../src/render/motion";
 import { drawScene, type SceneOccupant } from "../src/scene";
 
 const wrap = document.getElementById("wrap")!;
@@ -157,11 +157,27 @@ const occupants: (SceneOccupant | null)[] = (postcard?.plots ?? []).map(
 
 let stageCache: HTMLCanvasElement | null = null;
 let motionNow = 0;
+/** Timestamp of the previous frame, for the elapsed-time delta. Null until the first frame. */
+let lastFrameMs: number | null = null;
 
-function frame(): void {
+/**
+ * Same pause-on-hide rule as the garden: a backgrounded tab draws nothing, so the first frame
+ * back must not carry the whole absence into one jump of the sway.
+ */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") lastFrameMs = null;
+});
+
+function frame(nowMs: number = performance.now()): void {
   // Growth is frozen; MOTION is not. `now` never moves, `motionNow` does — the two-clock
   // signature on `drawScene` exists for exactly this.
-  motionNow += SPEED;
+  //
+  // Advanced by elapsed time at the same rate the garden uses, so a shared bed sways at the
+  // tempo its sender saw. It previously advanced a fixed amount per frame, which meant a
+  // visitor on a slower machine watched a slower garden than the one that was sent.
+  const dtMs = lastFrameMs === null ? 0 : nowMs - lastFrameMs;
+  lastFrameMs = nowMs;
+  motionNow += ticksElapsed(dtMs, MOTION_TICKS_PER_SECOND);
   stageCache = drawScene({
     ctx,
     W,

@@ -19,15 +19,95 @@
  */
 
 /**
- * Ticks per frame. Unhurried without being tedious.
+ * Ticks per SECOND, not per frame — and there are two of them, because the game has two tempos.
  *
- * Here rather than in `garden/garden.ts` because it is not the game's alone: a VISIT advances
+ * These replaced a single `SPEED = 1.4` that was added to the frame counter once per
+ * `requestAnimationFrame`. That made every duration in the game a function of the frame rate:
+ * measured 2026-08-04, the clock advanced ~1.4 ticks per frame at 6.5fps and at 60fps alike, so
+ * a plant took ~8.5s to grow here and would take ~1.65s on a machine that held 60fps throughout.
+ * An animation whose length depends on how fast the renderer happens to be is not a tuned
+ * animation, and no test could have caught it: every consumer agreed with every other one.
+ *
+ * The coupling was doing real work by accident, which is why removing it needs TWO rates rather
+ * than one. Growth is expensive and settled painting is cheap, so the frame rate itself was
+ * acting as an unintended tempo control — slow while a plant unfurled, fast once the bed
+ * settled. A single time-based rate cannot reproduce that: pick the settled tempo and growth
+ * becomes a blink, pick the growth tempo and the garden stops swaying.
+ *
+ * Here rather than in `garden/garden.ts` because they are not the game's alone: a VISIT advances
  * `motionNow` at this same rate so a shared garden sways exactly as it did for the sender, and
  * `src/game/pollinator.ts` states its durations in ticks against it. A second copy of a tick
  * rate would let one of those three drift silently — the sway would simply run at the wrong
  * speed, with nothing to fail.
  */
-export const SPEED = 1.4;
+
+/**
+ * Sway, gusts, insects, the recede animation and the plant-flash.
+ *
+ * 84 = the old 1.4 per frame at 60fps exactly, so a garden that already held 60fps — which is
+ * every settled bed, measured 60.1–60.4fps — moves at precisely the tempo this was tuned at.
+ * Nothing about the resting garden changes.
+ */
+export const MOTION_TICKS_PER_SECOND = 84;
+
+/**
+ * Growth, and flowers opening. Deliberately NOT 84.
+ *
+ * Derived from what the old clock actually did here, not chosen: measured 2026-08-04, a bed
+ * went from tick 0 to tick 138.6 in 8.47s, an average of **16.4 ticks/s** across the whole
+ * growth span. 17 keeps that, so a plant settling at tick 138 takes 8.1s against the 8.5s
+ * measured before — inside the run-to-run spread, since the opening bed is randomly seeded and
+ * a genome's `maxTick` varies with it.
+ *
+ * That average is the honest number and the instantaneous rate is not: growth ran at ~71
+ * ticks/s over the first half-second, when few flowers exist, and crawled to ~12.4 ticks/s once
+ * the bed reached full complexity, because the clock was frame-counted and growth is the
+ * expensive path — 6.5fps with a settled-complexity bed against 60fps once cached. A time-based
+ * clock removes that variation as well as the machine dependence: growth now advances evenly.
+ *
+ * It also stops growth from stretching itself. Slow frames used to slow the clock, so the
+ * expensive stretch lasted longer than its tick span implied — measured ~7.5s below 30fps
+ * before and ~5.0s after, with no change to the renderer at all.
+ *
+ * 1.4 entered in e2c843a, the same commit that added petal shading and the multi-plant garden
+ * and so created the cost, so the slow regime is what it was tuned against. Preserving the
+ * duration that was actually tuned beats inheriting the one a faster renderer would produce.
+ *
+ * This is the knob. Raise it and plants unfurl faster on every machine; growth no longer gets
+ * quicker just because the renderer got faster.
+ */
+export const GROWTH_TICKS_PER_SECOND = 17;
+
+/**
+ * Longest frame gap that may advance a clock, in milliseconds. A BACKSTOP, not the pause.
+ *
+ * Frame counting had one accidental virtue: a backgrounded tab stops getting frames, so the
+ * garden paused. Wall-clock time does not pause, and without a cap a tab restored after ten
+ * minutes would resolve 50,000 ticks in one step — every plant fully grown, every gust skipped.
+ *
+ * The obvious cap — around 100ms, a few frames at 60fps — is WRONG here, and measurably so. A
+ * growing bed runs at 6.5fps, which is 154ms a frame: a 100ms cap would silently throttle the
+ * clock on exactly the machine and the moment this change exists to fix, and growth would go
+ * back to running slower when the renderer does. The cap cannot tell "this tab is not being
+ * drawn" from "this frame was expensive", so it must not be the thing that decides.
+ *
+ * Hiding the tab is instead handled where the browser states it outright, on `visibilitychange`
+ * — see the handlers in `garden/garden.ts` and `visit/visit.ts`. This value is left as a
+ * backstop for stalls the event does not cover: a long GC, a blocking dialog, a paused
+ * debugger. 250ms is 4fps, below which nothing about the garden works anyway.
+ */
+export const MAX_FRAME_MS = 250;
+
+/**
+ * Ticks elapsed for a frame delta, clamped.
+ *
+ * Negative deltas are clamped to zero rather than trusted: `performance.now()` is monotonic,
+ * but the first frame after a resize or a restore computes its delta against a timestamp that
+ * may never have been set, and a clock that runs backwards un-grows a plant.
+ */
+export function ticksElapsed(dtMs: number, perSecond: number): number {
+  return (Math.min(Math.max(dtMs, 0), MAX_FRAME_MS) / 1000) * perSecond;
+}
 
 /** Radians-per-tick of the slow component. A full breath takes ~500 ticks. */
 const W_SLOW = 0.0125;

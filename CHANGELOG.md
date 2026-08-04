@@ -5,6 +5,42 @@ branch, so the units here are **milestones**, newest first, dated by the commits
 them. Where a milestone retracted or reverted something, that is recorded too — a changelog that
 only lists what worked is a marketing document.
 
+## The clock measures time — 2026-08-04
+
+- Growth, sway, gusts, insects and the recede animation were all driven by a counter that
+  advanced a fixed amount **once per animation frame**. Every duration in the game was therefore
+  a function of how fast the renderer happened to be: measured, the clock advanced ~1.4 ticks per
+  frame at 6.5fps and at 60fps alike, so a plant took ~8.5s to grow on this machine and would
+  have taken ~1.65s on one that held 60fps throughout. An animation with no defined length.
+- Fixed by measuring elapsed time instead — and it needed **two** rates, not one. The coupling
+  had been doing real work by accident: growth is expensive and settled painting is cheap, so
+  the frame rate was itself an unintended tempo control, slow while a plant unfurled and fast
+  once the bed settled. A single time-based rate reproduces neither end. Motion runs at 84 ticks
+  a second, which is the old 1.4 per frame at 60fps exactly, so a settled bed is unchanged;
+  growth runs at 17, the average the old clock actually achieved across a full growth span.
+- Growth is now **even**, where it used to run at ~71 ticks/s in the first half-second and crawl
+  to ~12.4 once the bed reached full complexity. It also stopped stretching itself: slow frames
+  used to slow the clock, so the expensive stretch lasted longer than its tick span implied —
+  ~7.5s below 30fps before, ~5.0s after, with no change to the renderer at all.
+- The carrier gate was `SPEED / CARRIER_INTERVAL_TICKS`, a per-frame probability with the same
+  defect, so pollinators arrived at whatever rate the machine drew at. Gated on elapsed ticks now.
+- Pausing on a hidden tab is handled on `visibilitychange`, **not** by the frame cap. The
+  tempting cap of ~100ms would have been wrong and measurably so: a growing bed's frames are
+  154ms, so it would have throttled the clock on exactly the machine and moment this change
+  exists to fix. A duration cannot tell an unrendered tab from a slow frame; the browser says
+  which it is. The cap remains at 250ms as a backstop for stalls the event does not cover.
+- All 37 uses of the old clock in `garden.ts` were classified as growth or motion **against the
+  compiler**, by renaming the variable so every site became a build error, rather than by eye.
+- `tools/check-clock.mjs` is the new gate, and it runs in CI where `check-phone.mjs` does not:
+  what it asserts is portable, because a clock that measures time keeps its rate in ticks per
+  second on any machine. Its stronger second assertion — that the rate survives a change of
+  frame rate — searches for a usable CPU throttle and says SKIP out loud if the machine has no
+  headroom, rather than passing quietly.
+- The 436 existing tests all passed against the broken clock and against the fix alike, which is
+  the whole reason the new gate had to be seen failing before it was trusted. Both it and the
+  unit tests were run against a deliberately reverted, frame-counted clock and confirmed to fail
+  for the stated reason, with their controls still passing.
+
 ## Garden sharing — 2026-08-02
 
 - `#garden=` opens a **visit**: someone else's bed and the forest behind it, read-only, frozen at

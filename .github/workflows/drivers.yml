@@ -97,6 +97,13 @@ jobs:
       - run: node tools/check-motion.mjs
       - run: node tools/check-viewports.mjs
 
+      # Runs here, unlike `check-phone.mjs`, because what it asserts IS portable: a clock that
+      # measures time keeps its rate in ticks per second on any machine, which is the whole
+      # claim. Its stronger second assertion needs to move the frame rate without passing the
+      # frame cap, which a shared runner may not allow — that one searches for a usable
+      # throttle and says SKIP out loud if none exists, rather than passing quietly.
+      - run: node tools/check-clock.mjs
+
       # A driver failure is a VISUAL failure most of the time, and "FAIL — coverage 0" does not
       # say what the screen looked like. The drivers already write PNGs; keep them.
       - if: failure()

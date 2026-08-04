@@ -11,6 +11,10 @@ import {
   shearPoint,
   swayAt,
   swayPhase,
+  GROWTH_TICKS_PER_SECOND,
+  MOTION_TICKS_PER_SECOND,
+  MAX_FRAME_MS,
+  ticksElapsed,
 } from "../src/render/motion";
 import { resolvePlacement } from "../src/render/accumulate";
 import { placeRetired } from "../src/render/forest";
@@ -283,5 +287,79 @@ describe("receding hands over to the buffer without a visible seam", () => {
     // first argument, including when that argument is undefined.
     const fresh = resolvePlacement(undefined, 12345, 3, WORLD);
     expect(fresh).toEqual(placeRetired(12345, 3, WORLD));
+  });
+});
+
+describe("the clocks measure time, not frames", () => {
+  /** Ticks accumulated by delivering `frames` frames of `dtMs` each, the way the loop does. */
+  const over = (frames: number, dtMs: number, rate: number): number =>
+    Array.from({ length: frames }, () => ticksElapsed(dtMs, rate)).reduce(
+      (a, b) => a + b,
+      0,
+    );
+
+  it("advances the same total however the same span is cut into frames", () => {
+    // THE defect. `now += SPEED` once per animation frame made every duration in the game a
+    // function of the renderer's speed: measured 2026-08-04, ~1.4 ticks per frame at 6.5fps
+    // and at 60fps alike, so a plant took ~8.5s to grow here and ~1.65s on a machine that
+    // held 60fps. Sixty frames of 10ms and twelve frames of 50ms are the same 600ms and must
+    // come to the same number of ticks.
+    for (const rate of [GROWTH_TICKS_PER_SECOND, MOTION_TICKS_PER_SECOND]) {
+      expect(over(60, 10, rate)).toBeCloseTo(over(12, 50, rate), 9);
+      expect(over(60, 10, rate)).toBeCloseTo(0.6 * rate, 9);
+    }
+  });
+
+  it("CONTROL: the two frame rates it compares are genuinely different", () => {
+    // Without this the assertion above is satisfied by any function of elapsed time at all,
+    // including one that ignores its argument — and by a test that compared 60 frames with
+    // 60 frames. The whole point is that the frame COUNT differs fivefold.
+    expect(60).not.toBe(12);
+    expect(60 * 10).toBe(12 * 50);
+  });
+
+  it("keeps a settled garden at exactly the tempo it was tuned at", () => {
+    // 1.4 ticks per frame at 60fps was the old motion rate, chosen by eye against a bed that
+    // holds 60fps once cached. Reproduce it or every sway, gust and carrier interval in the
+    // game silently retimes on the machine where it was tuned.
+    expect(ticksElapsed(1000 / 60, MOTION_TICKS_PER_SECOND)).toBeCloseTo(1.4, 9);
+  });
+
+  it("grows slower than it sways, because one rate cannot serve both", () => {
+    // The old clock got two tempos out of one constant by accident: growth is expensive and
+    // settled painting is cheap, so the frame rate itself was an unintended tempo control —
+    // 6.5fps while a plant unfurled, 60fps once the bed settled. Collapsing these back to a
+    // single rate gives either a garden that does not sway or growth that is a blink.
+    expect(GROWTH_TICKS_PER_SECOND).toBeLessThan(MOTION_TICKS_PER_SECOND);
+  });
+
+  it("does not throttle the clock at the frame rate growth actually runs at", () => {
+    // The cap exists for unrendered tabs, and the tempting value for it is ~100ms. That would
+    // be wrong: a growing bed runs at 6.5fps, or 154ms a frame, so a 100ms cap would slow the
+    // clock on exactly the machine and moment this change exists to fix.
+    const slowFrameMs = 1000 / 6.5;
+    expect(slowFrameMs).toBeLessThan(MAX_FRAME_MS);
+    expect(ticksElapsed(slowFrameMs, GROWTH_TICKS_PER_SECOND)).toBeCloseTo(
+      (slowFrameMs / 1000) * GROWTH_TICKS_PER_SECOND,
+      9,
+    );
+  });
+
+  it("caps a stalled frame instead of resolving the stall in one step", () => {
+    // A backgrounded tab is handled on `visibilitychange`; this is the backstop for stalls
+    // that event does not cover. Ten minutes must not arrive as ten minutes of growth.
+    expect(ticksElapsed(600_000, GROWTH_TICKS_PER_SECOND)).toBe(
+      ticksElapsed(MAX_FRAME_MS, GROWTH_TICKS_PER_SECOND),
+    );
+    // And what it does let through is a small fraction of one plant's growth, not a plant.
+    expect(ticksElapsed(600_000, GROWTH_TICKS_PER_SECOND)).toBeLessThan(5);
+  });
+
+  it("never runs a clock backwards", () => {
+    // The first frame after a restore measures against a timestamp that may never have been
+    // set. A negative delta would un-grow a plant, and `paintPlantCached` would be handed an
+    // age below the one it cached at.
+    expect(ticksElapsed(-50, GROWTH_TICKS_PER_SECOND)).toBe(0);
+    expect(ticksElapsed(-1e9, MOTION_TICKS_PER_SECOND)).toBe(0);
   });
 });

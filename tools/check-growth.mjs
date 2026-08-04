@@ -13,9 +13,21 @@
  *
  * If a check here starts failing, the render changed. Do not widen the tolerance.
  */
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { chromium } from "playwright";
 
 const URL = process.env.PROBE_URL ?? "http://localhost:5173/tools/growth-probe.html";
+
+/**
+ * Where to write growth frames for a human to look at. UNSET IN CI, and unset by default.
+ *
+ * Set `GROWTH_MOTION_OUT=shots/growth-motion` to capture. The frames are a review artifact, not
+ * an assertion — writing ~130 PNGs on every CI run would cost minutes and nobody would open
+ * them. `shots/` is already gitignored, and the reason is recorded there: tracked screenshots
+ * were 37 MiB of a 65 MB repository because every run rewrote them.
+ */
+const MOTION_OUT = process.env.GROWTH_MOTION_OUT;
 
 /**
  * The bar is RELATIVE, and measured every run.
@@ -198,6 +210,34 @@ for (const tick of GROWING_TICKS) {
   );
 }
 
+// ---- EVERY FRAME OF GROWTH, NOT FIVE OF THEM -----------------------------------------------
+// The five ticks above are 15 to 20 apart and a flower opens over OPEN_TICKS = 26, so a defect
+// that appears and resolves inside one opening can sit entirely between two of them. Every bug
+// this branch actually had was of that kind — a chain baked as a stale prefix, a bloom frozen at
+// 0.32, a petal squashed twice — and each is a mid-animation defect that a still taken at the
+// wrong moment reports as fine.
+//
+// THE BAR IS `CEILING`, NOT `OPENING_CEILING`. The plan for this task said to assert
+// `worst.max <= OPENING_CEILING`, and that is wrong for the reason recorded on the constant
+// itself: 56/255 was retracted as an absolute bar, because it was measured on a 9x
+// nearest-neighbour magnified review rather than on the fractional-coordinate blit the code
+// performs, and a 1:1 blit with no scaling at all already exceeds it. Asserting it against a
+// whole frame — which also carries every baked layer's resampling — would fail on cost the
+// relaxation is not responsible for, and the only way to make it pass would be to raise it,
+// which is the one thing this file tells you not to do. The relaxation is bounded on its own,
+// against its own reference, in the section below.
+const worst = await page.evaluate(() => window.__worstOverGrowth());
+check(
+  "CONTROL: the sweep actually swept — enough frames to cover an opening",
+  worst.frames > 200,
+  `${worst.frames} frames compared across the growth window`,
+);
+check(
+  "no frame of growth exceeds the ceiling — swept continuously, not sampled",
+  worst.max <= CEILING && worst.mean <= REFERENCE.mean,
+  `worst ${worst.max}/255 at tick ${worst.tick}, mean ${worst.mean.toFixed(4)}, over ${worst.frames} frames, vs ceiling ${CEILING}/255 mean ${REFERENCE.mean.toFixed(4)}`,
+);
+
 // ---- THE ONE RELAXATION, MEASURED ON ITS OWN -----------------------------------------------
 // An opening flower is blitted from its own bitmap rather than re-derived, which resamples
 // where the vector path would not. The design bounded that at the worst pixel of the visual
@@ -263,6 +303,128 @@ check(
   hidpiLayered.max <= hidpiCached.max + MAX_TOLERANCE,
   `layered ${hidpiLayered.max}/255 vs cached ${hidpiCached.max}/255`,
 );
+
+// ---- FRAMES TO LOOK AT ----------------------------------------------------------------------
+// Every check above turns a frame into a number. The question none of them answers is whether
+// growth READS the same — whether the bed still feels like it is growing rather than snapping
+// between states — and that is a human judgement on a moving picture, not a threshold.
+//
+// The visual review that approved the opening relaxation (spec §2) compared THREE STILL FLOWERS,
+// magnified. Nothing has yet looked at four plants growing at once at 1x, which is what a player
+// sees and the only place a timing or popping artefact can show up at all.
+if (MOTION_OUT) {
+  // Every 2 ticks. A flower opens over OPEN_TICKS = 26, so this is ~13 frames per opening —
+  // enough to see the animation rather than infer it from its endpoints.
+  const TICKS = [];
+  for (let t = 0; t <= 130; t += 2) TICKS.push(t);
+
+  // Deliberately NOT a wipe of the output directory: this path comes from an environment
+  // variable, and a driver that deletes whatever it is pointed at is a bad trade for tidiness.
+  // Frame names are deterministic, so a re-run overwrites its own.
+  mkdirSync(MOTION_OUT, { recursive: true });
+  await page.evaluate(() => window.__releaseAll());
+
+  for (const t of TICKS) {
+    const pad = String(t).padStart(3, "0");
+    for (const how of ["direct", "layered"]) {
+      // Ascending ticks, no release in between, so the "layered" sequence is the INCREMENTAL
+      // painter accumulating exactly as it does in the game. Capturing each tick from a fresh
+      // painter would produce a sequence the game never renders.
+      const url = await page.evaluate(
+        ({ tick, how }) => window.__frame(tick, how),
+        { tick: t, how },
+      );
+      writeFileSync(
+        join(MOTION_OUT, `${how}-t${pad}.png`),
+        Buffer.from(url.slice(url.indexOf(",") + 1), "base64"),
+      );
+    }
+  }
+  writeFileSync(join(MOTION_OUT, "index.html"), player(TICKS));
+  console.log(
+    `      wrote ${TICKS.length * 2} frames to ${MOTION_OUT}/ — ` +
+      `open ${MOTION_OUT}/index.html to watch both at 1x and flip between them`,
+  );
+}
+
+/**
+ * An A/B player, because the artefacts this is looking for are TEMPORAL.
+ *
+ * Two stills side by side answer "is this frame right". A pop, a stutter, a flower that jumps
+ * the last few percent of its opening, a stem that shifts when it bakes — none of those exist in
+ * a single frame. So the frames are played at a real rate, both painters in lockstep, with a key
+ * to cut between them at the same instant: a difference you cannot see when cutting between two
+ * frames at 1x is a difference the player will not see either.
+ */
+function player(ticks) {
+  return `<meta charset="utf8"><title>growth in motion — direct vs layered</title>
+<style>
+  body { background:#1b1f18; color:#cfd6c6; font:14px/1.5 system-ui, sans-serif; margin:0; padding:16px; }
+  #stage { position:relative; width:1240px; height:700px; max-width:100%; }
+  #stage img { position:absolute; inset:0; width:1240px; height:700px; max-width:100%; image-rendering:pixelated; }
+  #stage img.hidden { visibility:hidden; }
+  .bar { display:flex; gap:12px; align-items:center; margin:10px 0; flex-wrap:wrap; }
+  kbd { background:#333a2e; border-radius:3px; padding:1px 5px; }
+  b { color:#e8c46a; }
+</style>
+<div class="bar">
+  <button id="play">pause</button>
+  <input id="scrub" type="range" min="0" max="${ticks.length - 1}" value="0" style="width:420px">
+  <span>tick <b id="tick">0</b></span>
+  <span>showing <b id="which">layered</b></span>
+  <span>press <kbd>space</kbd> to cut between painters, <kbd>←</kbd> <kbd>→</kbd> to step</span>
+</div>
+<div id="stage">
+  <img id="direct" class="hidden">
+  <img id="layered">
+</div>
+<p>1x, no magnification. <b>layered</b> is this branch's growth painter, accumulating frame by
+frame exactly as the game does. <b>direct</b> is the original full repaint. They are in lockstep:
+whatever tick you are on, both images are that tick.</p>
+<script>
+  const TICKS = ${JSON.stringify(ticks)};
+  const pad = (t) => String(t).padStart(3, "0");
+  // Preloaded, so playback is not measuring the disk.
+  const frames = TICKS.map((t) => {
+    const d = new Image(); d.src = "direct-t" + pad(t) + ".png";
+    const l = new Image(); l.src = "layered-t" + pad(t) + ".png";
+    return { d, l };
+  });
+  const dEl = document.getElementById("direct");
+  const lEl = document.getElementById("layered");
+  const scrub = document.getElementById("scrub");
+  const tickEl = document.getElementById("tick");
+  const whichEl = document.getElementById("which");
+  const playBtn = document.getElementById("play");
+  let i = 0, playing = true, showLayered = true;
+  function render() {
+    dEl.src = frames[i].d.src;
+    lEl.src = frames[i].l.src;
+    dEl.classList.toggle("hidden", showLayered);
+    lEl.classList.toggle("hidden", !showLayered);
+    scrub.value = i;
+    tickEl.textContent = TICKS[i];
+    whichEl.textContent = showLayered ? "layered" : "direct";
+  }
+  // The clock is time-based in the game, so play the ticks at the rate the game runs them
+  // rather than one per animation frame.
+  const STEP_MS = 1000 / 30;
+  let last = 0;
+  function loop(now) {
+    if (playing && now - last > STEP_MS) { last = now; i = (i + 1) % frames.length; render(); }
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+  playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? "pause" : "play"; };
+  scrub.oninput = () => { playing = false; playBtn.textContent = "play"; i = +scrub.value; render(); };
+  addEventListener("keydown", (e) => {
+    if (e.key === " ") { e.preventDefault(); showLayered = !showLayered; render(); }
+    if (e.key === "ArrowRight") { playing = false; playBtn.textContent = "play"; i = Math.min(frames.length - 1, i + 1); render(); }
+    if (e.key === "ArrowLeft") { playing = false; playBtn.textContent = "play"; i = Math.max(0, i - 1); render(); }
+  });
+  render();
+</script>`;
+}
 
 check("no page errors", errors.length === 0, errors.join("; "));
 

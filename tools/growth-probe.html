@@ -141,7 +141,10 @@
     let inkBitmap = 0;
     /** Worst disagreement, in pixels, between the two arms' ink bounding boxes. */
     let boxOff = 0;
-    let sumVecW = 0, sumVecH = 0, sumBmpW = 0, sumBmpH = 0;
+    let sumVecW = 0,
+      sumVecH = 0,
+      sumBmpW = 0,
+      sumBmpH = 0;
     for (const plant of plants) {
       for (const b of plant.blooms) {
         const vec = mk();
@@ -244,6 +247,91 @@
       wRatio: sumBmpW / sumVecW,
       hRatio: sumBmpH / sumVecH,
     };
+  };
+
+  /**
+   * EVERY frame of growth, painted the way the game paints it — not five sampled ticks.
+   *
+   * `__compare(t, "direct-vs-swept")` sweeps to a tick and reads the result there, so the gate
+   * above only ever inspects the five ticks it names. A flower opens over OPEN_TICKS = 26, and
+   * `GROWING_TICKS` are 15 to 20 apart: an opening that went wrong in the middle and was correct
+   * at both ends would be invisible to it. Growth is also where every bug on this branch lived —
+   * the stale-prefix bake, the frozen 0.32 bloom, the double squash — and all three are
+   * mid-animation defects that a still at the wrong moment reports as fine.
+   *
+   * So this sweeps continuously and compares at every step, which is the same measurement the
+   * five-tick checks make, made densely. It returns the WORST frame and where it was, so a
+   * failure names a tick to go and look at instead of a number to argue with.
+   */
+  window.__worstOverGrowth = (until = 140, step = 2) => {
+    let max = 0;
+    let tick = -1;
+    let sum = 0;
+    let total = 0;
+    let frames = 0;
+    for (const plant of plants) {
+      releaseGrowth(plant);
+      for (let t = 0; t <= until; t += step) {
+        const a = draw("direct", plant, t);
+        // NOT released between frames — the layers accumulate, so this is the incremental
+        // painter under test rather than a fresh one-shot render at each tick.
+        const b = draw("layered", plant, t);
+        frames++;
+        let worstHere = 0;
+        for (let i = 0; i < a.length; i++) {
+          const d = Math.abs(a[i] - b[i]);
+          if (d) {
+            sum += d;
+            if (d > worstHere) worstHere = d;
+          }
+          total++;
+        }
+        if (worstHere > max) {
+          max = worstHere;
+          tick = t;
+        }
+      }
+      releaseGrowth(plant);
+    }
+    return { max, tick, frames, mean: sum / total };
+  };
+
+  // ---- FRAMES TO LOOK AT ----------------------------------------------------------------
+  // Every check in this file reduces a frame to a number, and the one question left is whether
+  // growth READS the same, which no number answers. These render the whole bed — four plants
+  // side by side, the way the garden shows them — so the sequence can be watched rather than
+  // summarised.
+
+  const FRAME_W = 1240;
+  const FRAME_H = 700;
+
+  /**
+   * One frame of the whole bed, as a PNG data URL.
+   *
+   * Deliberately NOT released between calls, so a driver walking the ticks upward drives the
+   * INCREMENTAL painter — the same accumulation the game does. Call `__releaseAll` to start a
+   * sequence over.
+   */
+  window.__frame = (tick, how, dpr = 1) => {
+    const c = document.createElement("canvas");
+    c.width = FRAME_W;
+    c.height = FRAME_H;
+    const g = c.getContext("2d");
+    g.fillStyle = "#2b3026";
+    g.fillRect(0, 0, FRAME_W, FRAME_H);
+    const slot = FRAME_W / plants.length;
+    plants.forEach((plant, i) => {
+      g.save();
+      g.translate((i + 0.5) * slot - W / 2, 0);
+      if (how === "layered") paintPlantGrowing(g, plant, tick, dpr);
+      else paintPlant(g, plant, tick);
+      g.restore();
+    });
+    return c.toDataURL("image/png");
+  };
+
+  window.__releaseAll = () => {
+    for (const plant of plants) releaseGrowth(plant);
   };
 
   /** How much ink a plant puts on screen — so a comparison of two blank frames cannot pass. */

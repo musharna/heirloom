@@ -11,6 +11,7 @@ import {
   paintStemPass,
   plantBounds,
 } from "./stage";
+import { petalPath } from "./petals";
 
 /**
  * Drawing a plant that is still CHANGING.
@@ -68,6 +69,9 @@ import {
 
 /** Room around the bounding box for halos and rim strokes, which sit outside the geometry. */
 const PAD = 26;
+
+/** Room around a single bloom's petals, for the rim stroke and its shading. */
+const BLOOM_PAD = 4;
 
 /**
  * The five passes, in the order `paintPlant` draws them.
@@ -199,6 +203,141 @@ function bloomPasses(
 }
 
 /**
+ * A flower's petals, painted once, so that opening it is a blit rather than a repaint.
+ *
+ * This is the design's single deliberate relaxation of the fidelity bar, and it is the change
+ * that pays for the whole exercise: at the worst moment 265 of 389 drawn blooms are mid-opening,
+ * and through most of growth it is 68–100%. Those are vector repaints of `petalPath` at 96
+ * samples per petal, every frame, and they are the measured 41.7%-of-frame `fill` cost.
+ *
+ * It works because a flower opening is FIXED geometry under a scale about its own centre.
+ * `withBloomTransform` applies `scale(o, o * squash)`, and `squash` does not change over time —
+ * so baking the bitmap at `o = 1` bakes the squash in with it, and blitting under a UNIFORM
+ * `scale(o, o)` reproduces the original exactly:
+ *
+ *     direct:  scale(o, o·s) · G           = (o·Gx, o·s·Gy)
+ *     bitmap:  scale(o, o) · scale(1, s)·G = (o·Gx, o·s·Gy)
+ *
+ * What it costs is resampling: the bitmap is rasterised at full size and minified to between
+ * 0.32 and 1.0. That was reviewed visually across three bloom archetypes before being accepted
+ * (spec §2), and it applies only while a flower opens — a settled plant is never drawn this way.
+ *
+ * Only PETALS are bitmapped. Halos are one gradient-filled arc each, and their gradient's inner
+ * stop is a fixed radius while the outer one scales with opening, so a halo is not a pure scale
+ * of itself and could not be blitted without changing its falloff. Centres are a few small arcs.
+ * Neither is worth spending fidelity on.
+ */
+type BloomBitmap = {
+  canvas: HTMLCanvasElement;
+  /** The world-space box the bitmap covers, at scale 1. */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  dpr: number;
+};
+
+const openingPetals = new WeakMap<Bloom, BloomBitmap>();
+
+/**
+ * Where a bloom's petals reach, at full size.
+ *
+ * Walked from the real petal outlines rather than from `b.radius`, which is the bloom's nominal
+ * size and not its drawn extent — a bitmap sized from it would clip the petals of any flower
+ * whose shape reaches past it. Paid once per bloom, on the frame it appears.
+ *
+ * Squash is deliberately NOT applied: it only ever pulls geometry toward the centre, so the
+ * unsquashed box is a superset of the squashed one and a superset is all that is needed.
+ */
+function petalExtent(b: Bloom): {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+} | null {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of b.petals) {
+    for (const pt of petalPath(p)) {
+      if (pt.x < minX) minX = pt.x;
+      if (pt.y < minY) minY = pt.y;
+      if (pt.x > maxX) maxX = pt.x;
+      if (pt.y > maxY) maxY = pt.y;
+    }
+  }
+  // The receptacle disc behind the petals is drawn by the same pass and can stick out past a
+  // short-petalled flower.
+  const disc = b.radius * 0.36;
+  minX = Math.min(minX, b.center.x - disc);
+  minY = Math.min(minY, b.center.y - disc);
+  maxX = Math.max(maxX, b.center.x + disc);
+  maxY = Math.max(maxY, b.center.y + disc);
+  if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return null;
+  return {
+    x: minX - BLOOM_PAD,
+    y: minY - BLOOM_PAD,
+    w: maxX - minX + BLOOM_PAD * 2,
+    h: maxY - minY + BLOOM_PAD * 2,
+  };
+}
+
+/** The bloom's petals at full size, built on first use and kept until the flower settles. */
+function petalBitmap(b: Bloom, dpr: number): BloomBitmap | null {
+  const held = openingPetals.get(b);
+  if (held && held.dpr === dpr) return held;
+
+  const box = petalExtent(b);
+  if (!box) return null;
+  const canvas = makeCanvas();
+  canvas.width = Math.ceil(box.w * dpr);
+  canvas.height = Math.ceil(box.h * dpr);
+  const g = canvas.getContext("2d");
+  if (!g) return null;
+  g.scale(dpr, dpr);
+  g.translate(-box.x, -box.y);
+  // At opening 1 — which is what makes the blit a uniform scale. See the note above.
+  bloomPasses(g, [b], FULLY_OPEN, "petals");
+
+  const made = { canvas, ...box, dpr };
+  openingPetals.set(b, made);
+  return made;
+}
+
+/**
+ * Draw one opening flower's petals from its bitmap. Returns false if it has no drawable extent.
+ *
+ * Exported so `tools/check-growth.mjs` can measure THIS relaxation on its own, against a vector
+ * paint of the same flower at the same opening. A whole-frame diff cannot: at a growth tick the
+ * frame also carries the resampling every baked layer pays, which is an order of magnitude
+ * larger and hides a bloom-sized error inside it. Measured — a flower squashed twice went
+ * undetected at three of the five growth ticks when the frame was compared as a whole.
+ *
+ * The gate calls the SAME function the game calls, deliberately. A check that re-implemented
+ * this transform would be testing its own copy of the arithmetic and would pass while the
+ * shipped one was wrong.
+ */
+export function blitOpeningPetals(
+  ctx: CanvasRenderingContext2D,
+  b: Bloom,
+  o: number,
+  dpr = 1,
+): boolean {
+  const bmp = petalBitmap(b, dpr);
+  if (!bmp) return false;
+  ctx.save();
+  // UNIFORM, because the bitmap was painted at opening 1 and so already carries the squash.
+  // Applying `squash` again here is the obvious mistake and it is what the gate checks for.
+  ctx.translate(b.center.x, b.center.y);
+  ctx.scale(o, o);
+  ctx.translate(-b.center.x, -b.center.y);
+  ctx.drawImage(bmp.canvas, bmp.x, bmp.y, bmp.w, bmp.h);
+  ctx.restore();
+  return true;
+}
+
+/**
  * Draw a plant that is still growing.
  *
  * Falls back to nothing when the plant has no drawable extent; the caller has already handled
@@ -259,10 +398,15 @@ export function paintPlantGrowing(
   const newlyOpen = blooms.filter(
     (b) => b.tick > openedBefore && b.tick <= openedBy,
   );
-  const opening_ = blooms.filter((b) => b.tick > openedBy);
-  if (newlyOpen.length)
+  const stillOpening = blooms.filter((b) => b.tick > openedBy);
+  if (newlyOpen.length) {
     for (const pass of ["halos", "petals", "centres"] as const)
       bloomPasses(ctxOf(pass), newlyOpen, FULLY_OPEN, pass);
+    // A flower that has finished opening is drawn into the layer as VECTOR, at full fidelity.
+    // The bitmap existed only to carry it through the animation, so it goes now — and it has to
+    // go explicitly: the WeakMap is keyed on the Bloom, and a Bloom lives as long as its Plant.
+    for (const b of newlyOpen) openingPetals.delete(b);
+  }
 
   ls.bakedTick = untilTick;
 
@@ -276,13 +420,32 @@ export function paintPlantGrowing(
   blit("leaves");
   for (const pass of ["halos", "petals", "centres"] as const) {
     blit(pass);
-    if (opening_.length) bloomPasses(ctx, opening_, opening, pass);
+    if (!stillOpening.length) continue;
+    if (pass !== "petals") {
+      bloomPasses(ctx, stillOpening, opening, pass);
+      continue;
+    }
+    // Petals — the expensive pass, and the one a bitmap can serve.
+    ctx.save();
+    ctx.shadowBlur = 0;
+    for (const b of stillOpening)
+      blitOpeningPetals(ctx, b, opening(b.tick), dpr);
+    ctx.restore();
   }
 }
 
 /** Drop a plant's layers. Called once it settles and the still-image cache takes over. */
 export function releaseGrowth(plant: Plant): void {
   layers.delete(plant);
+  // The bitmaps are keyed on Bloom, and a Bloom is reachable from its Plant for as long as the
+  // Plant is — so a WeakMap does NOT collect these on its own. A plant released mid-growth
+  // would hold every bitmap of every flower that had not finished opening.
+  for (const b of plant.blooms) openingPetals.delete(b);
+}
+
+/** How many of a plant's flowers are holding an opening bitmap right now. For the tests. */
+export function openingBitmapCount(plant: Plant): number {
+  return plant.blooms.filter((b) => openingPetals.has(b)).length;
 }
 
 /** Approximate bytes held for one plant's layers. For the memory assertion in the driver. */

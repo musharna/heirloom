@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **A settled plant must not change.** Once past `settledTick(maxTick)` the existing `paintPlantCached` path is used unaltered.
-- **Fidelity bar:** growth frames must be no further from a direct `paintPlant` than the settled cache already is, **re-measured in the same run** rather than against a constant. (A constant of 3/255 was written here first and was wrong — see Task 5.) The single exception is a flower during its ~1.5s of opening, bounded at **56/255** worst pixel (the measured visual-review ceiling).
+- **Fidelity bar:** growth frames must be no further from a direct `paintPlant` than the settled cache already is, **re-measured in the same run** rather than against a constant. (A constant of 3/255 was written here first and was wrong — see Task 5.) The single exception is a flower during its ~1.5s of opening, measured against an **unscaled blit of its own bitmap** plus a check on its silhouette. (A constant of 56/255 was written here first and was wrong too, for the same reason as the 3/255 — see Task 7. **Twice now, a bar on this branch was measured on an operation the code does not perform.**)
 - **`paintPlant` must keep working unchanged.** `forest.retire` composites with it and the lookdev sheet calls it directly.
 - **Growth timing must not move.** `SPEED`, `GROWTH_TICKS_PER_SECOND`, `OPEN_TICKS = 26` and `SETTLE_TICKS = 40` are set deliberately; this plan does not touch them.
 - **Every new gate must be seen failing** against a deliberately broken version before it is trusted, and every negative assertion needs a positive control in the same test.
@@ -1073,6 +1073,28 @@ which is the check that matters here."
 ### Task 7: Per-bloom bitmaps for opening flowers
 
 The measured 68%-of-blooms-animating case — the reason the previous task alone is not enough.
+
+> **AS BUILT, 2026-08-04.** Corrections, as in Task 6:
+>
+> 1. **The 56/255 ceiling below is retracted.** It came from a visual review that magnified
+>    flowers 9x with nearest-neighbour sampling. The code blits an integer-sized bitmap to
+>    fractional world coordinates; measured that way a **1:1 blit with no scaling at all already
+>    differs by 137/255.** Same mistake as the 3/255 in Task 5, second time on this branch. The
+>    bar is now an unscaled blit of the same bitmap, re-measured every run.
+> 2. **An error budget cannot police the transform, and a check was built that could not fail.**
+>    Any reference drawn through the same blit inherits the same defect. With the squash
+>    deliberately applied twice — every opening flower the wrong shape — all four budget checks
+>    passed. The gate now also compares the flowers' summed **silhouette**, which the blit does
+>    not get a vote on; the double squash shows up there as 0.82–0.90x height.
+> 3. **Only petals are bitmapped, not halos or centres.** A halo's gradient has a fixed inner
+>    radius and an outer one that scales with opening, so a halo is not a pure scale of itself
+>    and blitting it would change its falloff. Centres are a few small arcs. Neither is worth
+>    spending fidelity on. `blitOpeningPetals` is exported so the gate drives the shipped blit
+>    rather than a re-implementation of it.
+>
+> Step 2's assertion `expect(peak).toBeGreaterThan(0)` is kept, but `made === drawn` — one
+> bitmap built per flower over the whole sweep — is the assertion that says it is not
+> re-rasterising as it opens, which is the entire point.
 
 **Files:**
 

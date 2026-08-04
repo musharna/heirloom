@@ -33,14 +33,41 @@ const URL = process.env.PROBE_URL ?? "http://localhost:5173/tools/growth-probe.h
 const MAX_TOLERANCE = 4;
 const MEAN_TOLERANCE = 1.05;
 /**
- * Max channel delta while flowers are opening.
+ * How much slack a growth frame gets over the settled reference, for the opening relaxation.
  *
- * The one relaxation in the design: an opening flower will eventually be blitted from its own
- * bitmap rather than re-derived (Task 7), which resamples where the vector path would not. The
- * number is the worst pixel measured across three bloom archetypes in the visual review that
- * approved the trade — it is a ceiling carried over from that measurement, not a knob.
+ * **RETRACTED as an absolute ceiling, 2026-08-04.** This was 56/255, "the worst pixel measured
+ * across three bloom archetypes in the visual review that approved the trade". That review
+ * compared flowers magnified 9x with nearest-neighbour sampling over a common backdrop. The
+ * code does not do that. It blits an integer-sized bitmap to FRACTIONAL world coordinates, and
+ * measured that way a blit at 1:1 — no scaling whatsoever, so no relaxation involved at all —
+ * already differs by 137/255.
+ *
+ * This is the SECOND time a bar on this branch was measured on an operation the code does not
+ * perform; the first was the 3/255 settled bar in Task 5, and it has the same shape. The rule
+ * both times: measure the bar on the operation the code actually performs.
+ *
+ * So the isolated check below uses an unscaled blit as its reference and this number is only
+ * the whole-frame allowance, where it is generous by construction and not load-bearing.
  */
 const OPENING_CEILING = 56;
+/**
+ * How far a blitted flower's silhouette may sit from a painted one, in pixels.
+ *
+ * Bilinear resampling spreads an antialiased edge about a pixel outward, so the bitmap's
+ * outline lands a pixel wide of the vector one. It does not MOVE it. Anything beyond this is a
+ * transform that disagrees with `withBloomTransform`, not sampling.
+ */
+const BOX_SLACK = 3;
+/**
+ * How far the summed silhouette of 451 blitted flowers may differ from the painted ones.
+ *
+ * Resampling widens each edge by well under a pixel, and summed over hundreds of small flowers
+ * that lands a few percent high. A wrong transform is PROPORTIONAL — the squash factor here
+ * ranges 0.55–1.0, so applying it twice moves this ratio by tens of percent. Summing is what
+ * makes the two separable: on a single 6px-tall flower a 45% squash is 3px, which is the same
+ * order as edge bleed, and the check would not be able to tell them apart.
+ */
+const SHAPE_SLACK = 0.08;
 
 /** Settled ticks, where every bloom has finished opening. */
 const SETTLED_TICKS = [140, 200, 900];
@@ -145,20 +172,78 @@ for (const tick of SETTLED_TICKS) {
 // The bar is the reference above: the layered painter, while the plant is still changing, must
 // be no further from a direct paint than the cache is when it is working correctly.
 //
-// The 1.25 on max is because a different amount of geometry is on screen at each tick, not to
-// make anything pass; the mean, which is the stable statistic, is held to the reference flat.
+// A growth frame carries exactly two sources of error, and the ceiling is their sum rather than
+// a round number that happened to fit:
+//
+//   REFERENCE.max     the resampling every baked layer pays, measured this run off the SHIPPED
+//                     cache — the same cost the game has been paying for settled plants.
+//   OPENING_CEILING   the opening-bitmap relaxation, bounded by the visual review that approved
+//                     it (spec §2). It applies to a flower only while it opens.
+//
+// This replaces a `* 1.25` that had no derivation. The mean is the stable statistic and is held
+// to the reference FLAT, with no allowance at all.
+const CEILING = REFERENCE.max + OPENING_CEILING;
 for (const tick of GROWING_TICKS) {
   const layered = await page.evaluate((t) => window.__compare(t, "direct-vs-layered"), tick);
   const swept = await page.evaluate((t) => window.__compare(t, "direct-vs-swept"), tick);
   check(
     `tick ${tick} growing: layered is within the cache's own error budget`,
-    layered.max <= REFERENCE.max * 1.25 && layered.mean <= REFERENCE.mean,
-    `layered max ${layered.max}/255 mean ${layered.mean.toFixed(4)} vs reference max ${REFERENCE.max}/255 mean ${REFERENCE.mean.toFixed(4)}`,
+    layered.max <= CEILING && layered.mean <= REFERENCE.mean,
+    `layered max ${layered.max}/255 mean ${layered.mean.toFixed(4)} vs ceiling ${CEILING}/255 mean ${REFERENCE.mean.toFixed(4)}`,
   );
   check(
     `tick ${tick} growing: and so is the frame-by-frame bake`,
-    swept.max <= REFERENCE.max * 1.25 && swept.mean <= REFERENCE.mean,
-    `swept max ${swept.max}/255 mean ${swept.mean.toFixed(4)} vs reference max ${REFERENCE.max}/255 mean ${REFERENCE.mean.toFixed(4)}`,
+    swept.max <= CEILING && swept.mean <= REFERENCE.mean,
+    `swept max ${swept.max}/255 mean ${swept.mean.toFixed(4)} vs ceiling ${CEILING}/255 mean ${REFERENCE.mean.toFixed(4)}`,
+  );
+}
+
+// ---- THE ONE RELAXATION, MEASURED ON ITS OWN -----------------------------------------------
+// An opening flower is blitted from its own bitmap rather than re-derived, which resamples
+// where the vector path would not. The design bounded that at the worst pixel of the visual
+// review which approved it. Asserting it against a whole growth frame does not work: the frame
+// also carries the baked layers' resampling, which is larger, and a flower-sized error hides
+// inside it. Measured — with the squash deliberately applied twice, so that every opening
+// flower on screen was the wrong shape, three of the five whole-frame growth checks PASSED.
+//
+// The reference is a blit at opening 1 — the SAME bitmap, drawn at 1:1, with no scaling at all.
+// Whatever that costs is what blitting costs in this renderer, and it is already paid by every
+// layer and by the shipped `paintPlantCached`. Anything above it is what the RELAXATION costs,
+// which is the only new thing here.
+//
+// See the note on OPENING_CEILING for why an absolute 56/255 was tried first and was wrong.
+const UNSCALED = await page.evaluate(() => window.__openingError(1));
+check(
+  "CONTROL: even an unscaled blit is not pixel-perfect, so the reference is a real one",
+  UNSCALED.max > 0 && UNSCALED.flowers > 100,
+  `1:1 blit differs by max ${UNSCALED.max}/255, mean ${UNSCALED.mean.toFixed(5)}, over ${UNSCALED.flowers} flowers`,
+);
+check(
+  "CONTROL: the bitmap is big enough — a blitted flower is not missing ink",
+  UNSCALED.inkBitmap >= UNSCALED.inkVector,
+  `${UNSCALED.inkBitmap} inked pixels from the bitmap vs ${UNSCALED.inkVector} painted — a bitmap sized too small would lose petal tips and come out BELOW`,
+);
+
+// 0.32 is where a flower starts (`openingAt`), so it is the most minified the bitmap ever is,
+// and the worst case for this comparison.
+for (const o of [0.32, 0.5, 0.8, 1]) {
+  const iso = o === 1 ? UNSCALED : await page.evaluate((v) => window.__openingError(v), o);
+  check(
+    `opening ${o}: scaling the bitmap costs no more than blitting it already does`,
+    iso.max <= UNSCALED.max + MAX_TOLERANCE && iso.flowers === UNSCALED.flowers,
+    `max ${iso.max}/255 mean ${iso.mean.toFixed(5)} over ${iso.flowers} flowers, vs unscaled ${UNSCALED.max}/255`,
+  );
+  // The check the budget above CANNOT make. A reference measured through the same blit
+  // inherits whatever that blit gets wrong, so an error budget compares a broken arm against
+  // a broken baseline and passes. The flower's silhouette does not go through the blit —
+  // it is where the flower IS — so a transform that moves or reshapes it shows up here and
+  // nowhere else. BOX_SLACK is resampling bleed at the edge, not room for a wrong transform.
+  check(
+    `opening ${o}: the blitted flower is the same SHAPE, in the same place`,
+    Math.abs(iso.wRatio - 1) <= SHAPE_SLACK &&
+      Math.abs(iso.hRatio - 1) <= SHAPE_SLACK &&
+      iso.boxOff <= BOX_SLACK,
+    `silhouette ${iso.wRatio.toFixed(3)}x wide, ${iso.hRatio.toFixed(3)}x tall, worst corner ${iso.boxOff}px`,
   );
 }
 

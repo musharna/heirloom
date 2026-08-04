@@ -7,8 +7,12 @@
   page is served by the dev server and never enters the production bundle.
 -->
 <script type="module">
-  import { paintPlant } from "/src/render/stage.ts";
-  import { paintPlantGrowing, releaseGrowth } from "/src/render/growing.ts";
+  import { paintPlant, paintPetalPass } from "/src/render/stage.ts";
+  import {
+    blitOpeningPetals,
+    paintPlantGrowing,
+    releaseGrowth,
+  } from "/src/render/growing.ts";
   import { paintPlantCached } from "/src/render/cache.ts";
   import { growPlant } from "/src/growth/sim.ts";
   import { randomGenome } from "/src/genome/genome.ts";
@@ -114,6 +118,131 @@
       differing,
       pct: (100 * differing) / total,
       mean: sum / total,
+    };
+  };
+
+  /**
+   * The opening relaxation, ON ITS OWN.
+   *
+   * One flower, at one opening, painted two ways: the vector path the direct painter uses, and
+   * the bitmap blit `growing.ts` uses while it opens. Nothing else is on the canvas, so the
+   * difference is the relaxation and only the relaxation — which is what the design bounded and
+   * what a whole-frame diff cannot see, because the resampling of the baked layers is an order
+   * of magnitude larger and swamps it.
+   *
+   * This is the visual review that approved the trade (spec §2), turned into a number.
+   */
+  window.__openingError = (o, dpr = 1) => {
+    let max = 0;
+    let sum = 0;
+    let total = 0;
+    let flowers = 0;
+    let inkVector = 0;
+    let inkBitmap = 0;
+    /** Worst disagreement, in pixels, between the two arms' ink bounding boxes. */
+    let boxOff = 0;
+    let sumVecW = 0, sumVecH = 0, sumBmpW = 0, sumBmpH = 0;
+    for (const plant of plants) {
+      for (const b of plant.blooms) {
+        const vec = mk();
+        const gv = vec.getContext("2d");
+        gv.fillStyle = "#2b3026";
+        gv.fillRect(0, 0, W, H);
+        gv.save();
+        gv.shadowBlur = 0;
+        paintPetalPass(gv, [b], () => o);
+        gv.restore();
+
+        const bit = mk();
+        const gb = bit.getContext("2d");
+        gb.fillStyle = "#2b3026";
+        gb.fillRect(0, 0, W, H);
+        gb.save();
+        gb.shadowBlur = 0;
+        // The SHIPPED blit, not a copy of it.
+        if (!blitOpeningPetals(gb, b, o, dpr)) {
+          gb.restore();
+          continue;
+        }
+        gb.restore();
+        flowers++;
+
+        const a = gv.getImageData(0, 0, W, H).data;
+        const c = gb.getImageData(0, 0, W, H).data;
+        for (let i = 0; i < a.length; i++) {
+          const d = Math.abs(a[i] - c[i]);
+          if (d > max) max = d;
+          sum += d;
+          total++;
+        }
+        // How much each arm actually put on the canvas, and WHERE.
+        //
+        // The error budget above cannot police the transform on its own: any reference drawn
+        // through the same blit inherits the same mistake, and comparing a broken arm to a
+        // broken reference passes. Measured — with the squash applied twice, every error-budget
+        // check here passed, because the opening-1 reference was squashed twice as well.
+        //
+        // So the flower's own GEOMETRY is the reference instead, and geometry is not something
+        // the blit gets a vote on. A bitmap sized too small loses petal tips (ink falls); a
+        // wrong transform moves the silhouette (the box moves or changes shape). Neither can
+        // hide behind a budget.
+        let vx0 = 1e9,
+          vy0 = 1e9,
+          vx1 = -1,
+          vy1 = -1;
+        let bx0 = 1e9,
+          by0 = 1e9,
+          bx1 = -1,
+          by1 = -1;
+        for (let px = 0; px < W; px++) {
+          for (let py = 0; py < H; py++) {
+            const i = (py * W + px) * 4;
+            if (!(a[i] === 0x2b && a[i + 1] === 0x30 && a[i + 2] === 0x26)) {
+              inkVector++;
+              if (px < vx0) vx0 = px;
+              if (py < vy0) vy0 = py;
+              if (px > vx1) vx1 = px;
+              if (py > vy1) vy1 = py;
+            }
+            if (!(c[i] === 0x2b && c[i + 1] === 0x30 && c[i + 2] === 0x26)) {
+              inkBitmap++;
+              if (px < bx0) bx0 = px;
+              if (py < by0) by0 = py;
+              if (px > bx1) bx1 = px;
+              if (py > by1) by1 = py;
+            }
+          }
+        }
+        if (vx1 >= 0 && bx1 >= 0) {
+          boxOff = Math.max(
+            boxOff,
+            Math.abs(vx0 - bx0),
+            Math.abs(vy0 - by0),
+            Math.abs(vx1 - bx1),
+            Math.abs(vy1 - by1),
+          );
+          // Summed rather than compared per flower. The median petal here is 4.21px wide, so a
+          // single flower's box is only a few pixels tall and a proportional error rounds down
+          // into the noise — a 45% vertical squash on a 6px flower is 3px, which is the same
+          // order as resampling bleed. Over 451 flowers the quantisation averages out and a
+          // proportional error stays proportional.
+          sumVecW += vx1 - vx0 + 1;
+          sumVecH += vy1 - vy0 + 1;
+          sumBmpW += bx1 - bx0 + 1;
+          sumBmpH += by1 - by0 + 1;
+        }
+      }
+      releaseGrowth(plant);
+    }
+    return {
+      max,
+      mean: sum / total,
+      flowers,
+      inkVector,
+      inkBitmap,
+      boxOff,
+      wRatio: sumBmpW / sumVecW,
+      hRatio: sumBmpH / sumVecH,
     };
   };
 

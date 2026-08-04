@@ -3,6 +3,7 @@ import { bloomsFor, paintPlant } from "../src/render/stage";
 import {
   growingCount,
   growingLayerBytes,
+  openingBitmapCount,
   paintPlantGrowing,
   releaseGrowth,
   setGrowthCanvasSource,
@@ -82,18 +83,30 @@ describe("the drawn bloom set only ever grows", () => {
   });
 });
 
-/** A canvas whose context records what it was asked to draw, and whose size is settable. */
+/**
+ * A canvas whose context records what it was asked to draw.
+ *
+ * Each one stringifies to its creation index, so a `drawImage` recorded on the TARGET names
+ * which canvas was blitted. Without that the five pass layers and the per-bloom petal bitmaps
+ * are the same opaque `[object Object]` in the log, and the order of the composite — the thing
+ * this whole file exists to protect — cannot be read back at all.
+ */
 function recordingCanvas(sink: string[][]): () => HTMLCanvasElement {
   return () => {
     const { ctx, ops } = recordingContext();
+    const tag = `canvas${sink.length}`;
     sink.push(ops);
     return {
       width: 0,
       height: 0,
       getContext: () => ctx,
+      toString: () => tag,
     } as unknown as HTMLCanvasElement;
   };
 }
+
+/** The first five canvases a plant allocates are its pass layers, in PASSES order. */
+const LAYERS = 5;
 
 describe("the layered painter draws the same passes in the same order", () => {
   it("gives every pass its own layer and composites them in pass order", () => {
@@ -104,11 +117,22 @@ describe("the layered painter draws the same passes in the same order", () => {
     try {
       const { ctx, ops } = recordingContext();
       paintPlantGrowing(ctx, plant, 70, 1);
-      // Five layers allocated, one per pass.
-      expect(sink).toHaveLength(5);
-      // ...and five blits onto the target, in the order the layers were created — which is
-      // PASSES order, which is paintPlant's order.
-      expect(ops.filter((o) => o.startsWith("drawImage("))).toHaveLength(5);
+      // Five layers allocated, one per pass. Anything beyond them is a petal bitmap.
+      expect(sink.length).toBeGreaterThanOrEqual(LAYERS);
+      // The five are blitted onto the target in the order they were created — which is PASSES
+      // order, which is paintPlant's order. Asserted as a SEQUENCE, not a count: five blits in
+      // the wrong order is exactly the bug the pass boundaries exist to prevent, and a count
+      // cannot see it.
+      const blitted = ops
+        .filter((o) => o.startsWith("drawImage("))
+        .map((o) => o.slice("drawImage(".length).split(",")[0] ?? "");
+      expect(blitted.filter((c) => Number(c.slice(6)) < LAYERS)).toEqual([
+        "canvas0",
+        "canvas1",
+        "canvas2",
+        "canvas3",
+        "canvas4",
+      ]);
     } finally {
       setGrowthCanvasSource(was);
       releaseGrowth(plant);
@@ -125,7 +149,7 @@ describe("the layered painter draws the same passes in the same order", () => {
     try {
       const { ctx } = recordingContext();
       paintPlantGrowing(ctx, plant, 90, 1);
-      for (const [i, ops] of sink.entries()) {
+      for (const [i, ops] of sink.slice(0, LAYERS).entries()) {
         expect(
           ops.some((o) => o.startsWith("fill(")),
           `layer ${i} drew nothing`,
@@ -153,7 +177,12 @@ describe("the layered painter draws the same passes in the same order", () => {
     try {
       const { ctx } = recordingContext();
       for (let t = 0; t <= 200; t += 2) paintPlantGrowing(ctx, plant, t, 1);
-      baked = sink.flat().filter((o) => o.startsWith("fill(")).length;
+      // The five pass LAYERS only. Canvases past them are per-bloom petal bitmaps, which are
+      // a different claim — counted in their own test below.
+      baked = sink
+        .slice(0, LAYERS)
+        .flat()
+        .filter((o) => o.startsWith("fill(")).length;
     } finally {
       setGrowthCanvasSource(was);
       releaseGrowth(plant);
@@ -185,7 +214,8 @@ describe("the layered painter draws the same passes in the same order", () => {
     try {
       const { ctx, ops } = recordingContext();
       for (let t = 0; t <= 200; t += 10) paintPlantGrowing(ctx, plant, t, 1);
-      // Both halves count: what was baked into layers AND what was redrawn live each frame.
+      // EVERY half counts: baked into layers, painted into a petal bitmap, and redrawn live
+      // onto the target. Leaving any of them out would make this a measurement of bookkeeping.
       incremental = fills(sink.flat()) + fills(ops);
     } finally {
       setGrowthCanvasSource(was);
@@ -197,6 +227,39 @@ describe("the layered painter draws the same passes in the same order", () => {
 
     expect(incremental).toBeGreaterThan(0);
     expect(fills(naive.ops) / incremental).toBeGreaterThan(3);
+  });
+
+  it("paints each opening flower once and drops its bitmap when it settles", () => {
+    const rand = mulberry32(2718);
+    const plant = growPlant(express(randomGenome(rand)), 1234, { x: 0, y: 0 });
+    const sink: string[][] = [];
+    const was = setGrowthCanvasSource(recordingCanvas(sink));
+    let peak = 0;
+    let held = 0;
+    let made = 0;
+    try {
+      const { ctx } = recordingContext();
+      for (let t = 0; t <= 200; t += 2) {
+        paintPlantGrowing(ctx, plant, t, 1);
+        peak = Math.max(peak, openingBitmapCount(plant));
+      }
+      held = openingBitmapCount(plant);
+      made = sink.length - LAYERS;
+    } finally {
+      setGrowthCanvasSource(was);
+      releaseGrowth(plant);
+    }
+
+    const drawn = bloomsFor(plant, 200).length;
+    // POSITIVE CONTROL: a plant with no flowers releases nothing and would pass on both counts.
+    expect(drawn).toBeGreaterThan(0);
+    expect(peak).toBeGreaterThan(0);
+    // Every bitmap was released. A flower that finished opening is drawn as vector after that,
+    // so a bitmap still held at the end is a leak that lives as long as the plant.
+    expect(held).toBe(0);
+    // And each flower was painted into a bitmap ONCE, not re-rasterised as it opened — which
+    // is the entire point, since re-rasterising is what this replaces.
+    expect(made).toBe(drawn);
   });
 
   it("holds layers per plant and releases them on request", () => {

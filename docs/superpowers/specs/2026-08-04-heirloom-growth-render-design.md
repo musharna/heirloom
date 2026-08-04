@@ -61,9 +61,30 @@ shipped and was accepted.
 its own bitmap rather than re-derived, so it carries resampling error the rest of the plant does
 not. It was reviewed visually before being accepted: three bloom archetypes spanning the measured
 population (3 petals — the mode at 48%; 12 — upper quartile; 27 — the doubled tail) at opening 0.32
-and 1.00, magnified 9x nearest-neighbour over a common backdrop. Worst single pixel 21–56/255, and
-the two arms were indistinguishable by eye at every archetype. The relaxation applies only while a
-flower is opening — `OPEN_TICKS = 26` ticks, ~1.5s — and never to a settled plant.
+and 1.00, magnified 9x nearest-neighbour over a common backdrop. The two arms were
+indistinguishable by eye at every archetype. The relaxation applies only while a flower is
+opening — `OPEN_TICKS = 26` ticks, ~1.5s — and never to a settled plant.
+
+**CORRECTED 2026-08-04, after implementation measured it.** That review also produced a worst
+pixel of 21–56/255, and this section stated it as the ceiling to assert. It is not one, for the
+same reason the 3/255 above was not: it was measured on an operation the code does not perform.
+The review magnified flowers 9x with nearest-neighbour sampling; the code blits an integer-sized
+bitmap to fractional world coordinates. Measured that way, a blit at **1:1 — no scaling at all,
+so no relaxation involved — already differs by 137/255.** This is the second bar on this branch
+measured against the wrong operation, and the rule is the same both times: measure the bar on
+what the code actually does.
+
+What the relaxation costs is therefore measured against an **unscaled blit of the same bitmap**,
+which isolates scaling from the resampling every blit in this renderer already pays. It costs
+nothing detectable: at openings 0.32, 0.5 and 0.8 the worst pixel is 121, 115 and 133/255 against
+the unscaled 137/255.
+
+An error budget alone cannot police this, because a reference drawn through the same blit
+inherits whatever that blit gets wrong — with the squash deliberately applied twice, every
+budget check passed. So the flower's **silhouette** is checked as well: the summed bounding box
+of 451 blitted flowers must match the painted ones within 8%. That is a fact about where the
+flower is, which the blit does not get a vote on, and the double squash shows up in it plainly
+as flowers 0.82–0.90x their proper height.
 
 ## 3. Architecture
 
@@ -179,7 +200,8 @@ renderer and, as the clock work demonstrated, against a broken version of the th
   same run rather than against a constant. The instrument is the
   render-layer A/B harness that measured a 0.000 noise floor on the petal-shading work.
 - **Fidelity, growing:** same comparison at a sweep of growth ticks. The opening-bloom relaxation
-  means the bound there is the measured 21–56/255 worst pixel, asserted as a ceiling.
+  means the bound there is measured against an UNSCALED blit of the same bitmap, plus a check on
+  the flower's silhouette that no error budget can make. See the correction in §2.
 - **Fidelity, ACCUMULATED — added 2026-08-04.** Every comparison above renders the plant in a
   single call, and a comparison that renders in one call cannot fail on a bad incremental bake,
   because a bad bake takes two frames to happen. So each of them runs a second time against a

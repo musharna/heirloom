@@ -1074,3 +1074,108 @@ chain: driver exit 1 → step → called-workflow job → unsatisfied `needs` �
 failure-artifact upload fired too, so the screenshots of the broken frame were waiting in the
 run. On the real runner `check-motion` measures 60.1 fps, the same as locally, so its one
 frame-rate assertion stays where it is.
+
+
+## 27. The clock was counting frames — and the coupling was load-bearing
+
+The growth-phase frame rate was picked as the next piece of work, and the measurement changed
+what the work was. Two of the three options on the table were killed by it, and the third turned
+out to be a different job entirely.
+
+### What was measured
+
+Pinning the growth clock and sweeping ages, on the dev build at 1220x640 in headless Chromium
+with 6 plants and 366 blooms:
+
+| age | fps | blooms | | age | fps | blooms |
+|----:|----:|-------:|-|----:|----:|-------:|
+| 20 | 16.0 | 101 | | 120 | 38.4 | 366 |
+| 40 | 7.4 | 292 | | 140 | 60.4 | 366 |
+| 60 | 5.8 | 351 | | 200 | 60.3 | 366 |
+| 80 | 5.6 | 364 | | 900 | 60.4 | 366 |
+| 100 | 8.3 | 366 | | | | |
+
+Age 100 and age 140 hold the **identical 366 blooms** and differ by 7.3x in frame rate. Same
+geometry, same scene; the only thing that changes is `untilTick < settledTick` flipping in
+`paintPlantCached`. The cost is the uncached path, not scene complexity, and that pairing is what
+removes bloom count as a confound. Free-running from a fresh load: ~7.5s below 30fps, floor 6.5.
+
+### A number in §24 that does not transfer
+
+§24 concludes "a drawn frame costs ~27ms, of which under 4ms is JavaScript; the rest is
+rasterising and compositing", and rules out lowering the drawing resolution and drawing every
+other frame on that basis. **That was measured on the settled garden — on `drawImage` blits.**
+During growth the split is 170.6ms of script in a 179.1ms frame, 95%. Neither §24's conclusion
+nor its two refutations apply to the growth regime. The lesson is not that §24 was wrong; it is
+that a profile carries the regime it was taken in, and this project has two.
+
+CPU profile at pinned age 80, 18804 samples: `fill` 41.7%, `(program)` 20.6%, `petalPath` 14.7%,
+`lineTo` 5.7%, GC 1.8%, `buildOutline` 1.7%. Canvas 2D calls run synchronously inside the JS
+task, which is why rasterising shows up as "script".
+
+### Two candidates killed, one defect found
+
+**Cache the stems pass and repaint flowers live.** Structurally the one sound incremental split,
+because `paintPlant` draws stems before flowers and a pass boundary is order-correct by
+construction. Measured worth: **~6.5% of the frame.** Flowers cost ~5x stems, by two independent
+attributions that agree (29.4% vs 5.4% inclusive; 12.4% vs 2.6% by direct caller). Not worth a
+session.
+
+**Naive incremental caching** — bake what has grown, append the frontier — is unsound. Chains are
+globally depth-sorted, so a branch appearing later can need to draw BEHIND ink already baked in.
+Checked in the source before it was proposed rather than after it was built.
+
+**A real defect, not yet fixed:** `petalPath(spec, samples = 96)` is called as `petalPath(p)` for
+every petal regardless of size, and the median petal is 4.21px — 97 points at 0.04px spacing. The
+same class as the petal-shading fix, and the same class §19 named. But quantified before being
+recommended: sample count drives at most ~22% of the frame, so ~6.5 to ~7.8fps. Real, causal, and
+nowhere near sufficient. Getting 170ms under 16.6ms is a ~10x reduction, and only not repainting
+the plant every frame delivers that.
+
+### The finding that reframed the work
+
+`garden/garden.ts` advanced the clock with `now += SPEED` inside the `requestAnimationFrame`
+callback. **The clock counted frames, not seconds** — confirmed at ~1.4 ticks per frame at 6.5fps
+and at 60fps alike. So the slow frame rate WAS the growth duration: growth is ~93 frames wide
+whatever the speed, which reads as ~8.5s here and would be ~1.65s on a machine holding 60fps.
+Fixing the frame rate alone would have made the game visibly worse, and the animation had no
+defined length on any machine — a throttled phone watched it far longer than a desktop, with
+nothing in the code stating an intent.
+
+**And the coupling was doing real work.** Growth is expensive and settled painting is cheap, so
+the frame rate was an unintended adaptive tempo control: slow while a plant unfurled, fast once
+the bed settled. This is why the fix needs two rates. Pick the settled tempo and growth becomes a
+blink; pick the growth tempo and the garden stops swaying. `drawScene` had taken two clocks since
+the visit page was added, and the garden had simply been passing the same value for both.
+
+Motion is 84 ticks/s — the old 1.4 per frame at 60fps exactly, so a settled bed is unchanged.
+Growth is 17, the average the old clock actually achieved across a full span (tick 0 to 138.6 in
+8.47s = 16.4 ticks/s). Growth is now even, where it ran at ~71 ticks/s in the first half-second
+and crawled to ~12.4 at full complexity; and it stopped stretching itself, since slow frames used
+to slow the clock — ~7.5s below 30fps before, ~5.0s after, with no renderer change at all.
+
+### Three things this got right by not trusting the obvious
+
+**The cap on a frame delta must not be ~100ms.** A growing bed's frames are 154ms, so the obvious
+value would have throttled the clock on exactly the machine and moment the change exists to fix.
+A duration cannot tell an unrendered tab from a slow frame — the browser states visibility
+outright, so `visibilitychange` handles the pause and the 250ms cap is only a backstop.
+
+**37 sites, classified by the compiler.** Renaming the variable turned every use into a build
+error, so growth-versus-motion was decided deliberately at each one instead of by eye. A missed
+site could not compile.
+
+**Every new check was seen failing.** All 436 existing tests passed against the broken clock and
+the fix alike — the change had no coverage at all, which is why nothing had ever caught it. The
+unit tests and `tools/check-clock.mjs` were both run against a deliberately reverted frame-counted
+clock: the driver reported 84.07 vs 23.72 ticks/s, 71.9% apart, while both of its controls still
+passed. A control that failed also did its job — a 4x CPU throttle moved a settled bed only from
+59 to 37fps, refusing to let a weak throttle count as a two-rate comparison, so the driver now
+searches a ladder for a throttle that genuinely separates the rates and stays inside the cap.
+
+### Still open
+
+The ~10x render reduction. The remaining live direction is temporal level-of-detail during
+growth, which needs a design pass and a stated pixel-error budget rather than another patch — the
+render-layer A/B harness from the petal-shading work measured a 0.000 noise floor and is the
+right instrument for it.

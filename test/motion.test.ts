@@ -301,7 +301,7 @@ describe("the clocks measure time, not frames", () => {
   it("advances the same total however the same span is cut into frames", () => {
     // THE defect. `now += SPEED` once per animation frame made every duration in the game a
     // function of the renderer's speed: measured 2026-08-04, ~1.4 ticks per frame at 6.5fps
-    // and at 60fps alike, so a plant took ~8.4s to grow here and ~1.55s on a machine that
+    // and at 60fps alike, so a plant took ~8.5s to grow here and ~1.65s on a machine that
     // held 60fps. Sixty frames of 10ms and twelve frames of 50ms are the same 600ms and must
     // come to the same number of ticks.
     for (const rate of [GROWTH_TICKS_PER_SECOND, MOTION_TICKS_PER_SECOND]) {

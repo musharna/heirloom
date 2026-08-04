@@ -24,7 +24,7 @@
  * These replaced a single `SPEED = 1.4` that was added to the frame counter once per
  * `requestAnimationFrame`. That made every duration in the game a function of the frame rate:
  * measured 2026-08-04, the clock advanced ~1.4 ticks per frame at 6.5fps and at 60fps alike, so
- * a plant took ~8.4s to grow here and would take ~1.55s on a machine that held 60fps throughout.
+ * a plant took ~8.5s to grow here and would take ~1.65s on a machine that held 60fps throughout.
  * An animation whose length depends on how fast the renderer happens to be is not a tuned
  * animation, and no test could have caught it: every consumer agreed with every other one.
  *
@@ -53,12 +53,25 @@ export const MOTION_TICKS_PER_SECOND = 84;
 /**
  * Growth, and flowers opening. Deliberately NOT 84.
  *
- * The old rate reached ~17 ticks/s during growth on this machine, because growth is the
- * expensive path: measured 6.5fps with a settled-complexity bed, against 60fps once cached. A
- * plant therefore took ~8.4s to reach its settle point, and that is what the value was tuned
- * against — 1.4 entered in e2c843a, the same commit that added petal shading and the
- * multi-plant garden and so created the cost. Preserving the duration that was actually tuned
- * beats inheriting the one a faster renderer would have produced.
+ * Derived from what the old clock actually did here, not chosen: measured 2026-08-04, a bed
+ * went from tick 0 to tick 138.6 in 8.47s, an average of **16.4 ticks/s** across the whole
+ * growth span. 17 keeps that, so a plant settling at tick 138 takes 8.1s against the 8.5s
+ * measured before — inside the run-to-run spread, since the opening bed is randomly seeded and
+ * a genome's `maxTick` varies with it.
+ *
+ * That average is the honest number and the instantaneous rate is not: growth ran at ~71
+ * ticks/s over the first half-second, when few flowers exist, and crawled to ~12.4 ticks/s once
+ * the bed reached full complexity, because the clock was frame-counted and growth is the
+ * expensive path — 6.5fps with a settled-complexity bed against 60fps once cached. A time-based
+ * clock removes that variation as well as the machine dependence: growth now advances evenly.
+ *
+ * It also stops growth from stretching itself. Slow frames used to slow the clock, so the
+ * expensive stretch lasted longer than its tick span implied — measured ~7.5s below 30fps
+ * before and ~5.0s after, with no change to the renderer at all.
+ *
+ * 1.4 entered in e2c843a, the same commit that added petal shading and the multi-plant garden
+ * and so created the cost, so the slow regime is what it was tuned against. Preserving the
+ * duration that was actually tuned beats inheriting the one a faster renderer would produce.
  *
  * This is the knob. Raise it and plants unfurl faster on every machine; growth no longer gets
  * quicker just because the renderer got faster.

@@ -4,6 +4,7 @@ import {
   paintPlantCached,
   setCanvasSource,
 } from "../src/render/cache";
+import { growingCount, setGrowthCanvasSource } from "../src/render/growing";
 import { growPlant } from "../src/growth/sim";
 import type { Phenotype, Plant } from "../src/types";
 
@@ -77,23 +78,68 @@ function destination(): {
 }
 
 let restore: (() => HTMLCanvasElement) | null = null;
+let restoreGrowth: (() => HTMLCanvasElement) | null = null;
 afterEach(() => {
   if (restore) setCanvasSource(restore);
+  if (restoreGrowth) setGrowthCanvasSource(restoreGrowth);
   restore = null;
+  restoreGrowth = null;
 });
+
+/**
+ * `paintPlantCached` drives TWO caches now, and they get their canvases from separate sources.
+ *
+ * Deliberately separate: this file's whole subject is which of the two is in play at a given
+ * tick, and one shared counter could not tell "the still cache was built" from "five growth
+ * layers were allocated". Stub both, or the growth path reaches for a real `document`.
+ */
+const stubGrowthCanvases = (): number[] => {
+  const made = [0];
+  restoreGrowth = setGrowthCanvasSource(() => {
+    made[0]!++;
+    return stubCanvas();
+  });
+  return made;
+};
 
 const plantAt = (seed: number): Plant => growPlant(P, seed, { x: 300, y: 390 });
 const SETTLED = 500;
 
 describe("a finished plant is drawn once and blitted thereafter", () => {
-  it("draws paths while the plant is still changing", () => {
-    // Caching a moving target would rebuild the cache every frame, which is strictly worse
-    // than not caching at all.
-    restore = setCanvasSource(stubCanvas);
+  it("routes a plant that is still changing to the growth painter", () => {
+    // Caching a moving target as ONE still image would rebuild that image every frame, which
+    // is strictly worse than not caching at all. It goes to `growing.ts` instead, which caches
+    // per drawing pass and appends only what has stopped moving.
+    restore = setCanvasSource(() => {
+      throw new Error("the still cache must not be built for a growing plant");
+    });
+    const growthCanvases = stubGrowthCanvases();
     const { ctx, counts } = destination();
-    paintPlantCached(ctx, plantAt(1), 40, SETTLED, 1);
-    expect(counts.drawImage).toBe(0);
+    const plant = plantAt(1);
+    paintPlantCached(ctx, plant, 40, SETTLED, 1);
+
+    expect(cachedCount([plant])).toBe(0);
+    expect(growingCount([plant])).toBe(1);
+    // Five pass layers, plus a bitmap for each flower still opening.
+    expect(growthCanvases[0]).toBeGreaterThanOrEqual(5);
+    // Five layer blits — and paths still drawn straight to the target for what is moving,
+    // which is what makes this a growth frame rather than a replayed still.
+    expect(counts.drawImage).toBeGreaterThanOrEqual(5);
     expect(counts.fill).toBeGreaterThan(10);
+  });
+
+  it("drops the growth layers the moment the still cache takes over", () => {
+    // They are several megabytes for a large plant and are never read again. Released on the
+    // transition rather than on every settled frame, since the release walks all the blooms.
+    restore = setCanvasSource(stubCanvas);
+    stubGrowthCanvases();
+    const { ctx } = destination();
+    const plant = plantAt(11);
+    paintPlantCached(ctx, plant, 40, SETTLED, 1);
+    expect(growingCount([plant])).toBe(1); // CONTROL: there was something to release
+    paintPlantCached(ctx, plant, Infinity, SETTLED, 1);
+    expect(growingCount([plant])).toBe(0);
+    expect(cachedCount([plant])).toBe(1);
   });
 
   it("blits once it has settled", () => {
@@ -156,6 +202,7 @@ describe("a finished plant is drawn once and blitted thereafter", () => {
   it("CONTROL: an un-settled plant is never cached, however often it is drawn", () => {
     // Guards the branch from the other side. If the settle check were inverted or dropped, the
     // tests above would all still pass and every plant would freeze at its first frame.
+    stubGrowthCanvases();
     let made = 0;
     restore = setCanvasSource(() => {
       made++;

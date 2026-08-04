@@ -1158,6 +1158,33 @@ blitted while it opens, then baked when it settles."
 
 ### Task 8: Wire it in, and gate it
 
+> **AS BUILT, 2026-08-04.** The routing is as written. The gate is not:
+>
+> 1. **Split into two drivers, for a structural reason.** `tools/growth-probe.html` imports
+>    `/src` directly and is not one of the four inputs `vite.config.ts` builds, so it does not
+>    exist in a production bundle and cannot be served by `vite preview`. `check-growth.mjs`
+>    (fidelity) drives the dev server and runs in CI, because its bars are re-measured every run
+>    and therefore port. `check-growth-fps.mjs` (frame rate, memory) drives the real garden and
+>    stays local with `check-phone.mjs`, because frame-rate floors do not port.
+> 2. **The frame rate is measured FREE-RUNNING, not pinned.** Pinning holds ~265 flowers
+>    permanently mid-opening — a state growth never reaches, since a flower opens for 1.5s and
+>    is then baked. Pinned, the bed reads 11–18fps; free-running, the same bed reads a p90 of
+>    41.8–50.0 with 0.2–0.6s below 30, against ~5.0s before this work. The plan pinned so the
+>    check would not depend on machine speed, but the clock became time-based on 2026-08-04, so
+>    a planting already takes the same wall-clock duration everywhere.
+> 3. **`expect(median > 30)` was a check that could not fail.** The sampling window covers a
+>    whole planting and growth ends well before it does, so most frames in it are settled frames.
+>    Verified by routing growth back to the pre-branch painter: the median still read 59.5fps and
+>    the check PASSED, while `secondsBelow` read 5.34s and p90 read 10.4. The assertion is p90.
+> 4. **The garden is now seedable (`?seed=`), and the thresholds are worthless without it.**
+>    Genomes are drawn from `Date.now()`, so an unseeded run measures a different bed each time —
+>    measured 100 flowers on screen in one run and 350 in the next, moving "seconds below 30" from
+>    0.00 to 1.00 with no code change.
+> 5. **The memory bound the plan self-review flagged as missing is in**, both a ceiling and a
+>    release check — and writing the release check found a leak: `releaseGrowth` fired only on
+>    the frame the still image was BUILT, so a plant re-entering growth afterwards held its
+>    layers forever (measured 8.6MB). It now fires on every settled frame.
+
 **Files:**
 
 - Modify: `src/render/cache.ts:61`

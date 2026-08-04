@@ -210,9 +210,21 @@ renderer and, as the clock work demonstrated, against a broken version of the th
   every one-shot check passed and seven frame-by-frame checks failed.
 - **Ordering:** an explicit test that a bloom present at tick T is still present at every tick
   after T, across many random genomes. This is §3.1(2) and the design fails without it.
-- **Performance:** `tools/check-growth.mjs` asserts the growth phase clears the same 30fps floor
-  `tools/check-motion.mjs` already asserts for the settled bed (`:139`), measured with the growth
-  clock pinned so the check does not depend on how fast the machine happens to grow.
+- **Performance:** `tools/check-growth-fps.mjs` asserts the growth phase clears the same 30fps
+  floor `tools/check-motion.mjs` already asserts for the settled bed (`:139`).
+
+  **CORRECTED 2026-08-04.** This said "with the growth clock pinned so the check does not depend
+  on how fast the machine happens to grow". Pinning measures a state the game cannot enter — it
+  holds every flower permanently mid-opening, when a real flower opens for 1.5s and is then baked
+  — and the clock became time-based the same day, so a planting already takes the same wall-clock
+  duration on any machine. The measurement is free-running over a whole planting: **p90 41.8–50.0
+  fps and 0.2–0.6 seconds below 30, against ~5.0 seconds before this work.** The pinned figure
+  (11–18fps) is reported as a note that bounds the worst case.
+
+  The garden gained a `?seed=` parameter for this. Genomes are drawn from `Date.now()`, so an
+  unseeded run measures a different bed each time — 100 flowers on screen in one run and 350 in
+  the next — and every threshold here would have been a coin flip.
+
 - **Motion:** growth captured as a frame sequence both ways and compared at 1x, unmagnified. The
   visual review that approved the opening relaxation was static, and motion is the one thing a
   still comparison cannot answer.
@@ -225,8 +237,12 @@ renderer and, as the clock work demonstrated, against a broken version of the th
   function that decides what the game looks like. Mitigation: land the extraction as its own
   change, proven pixel-neutral, before any layer exists.
 - **Memory.** Five layers plus up to a few hundred small bitmaps per growing plant, times six
-  plants. Bitmaps are released as blooms settle, and layers are released at the settle tick, but
-  the peak needs measuring on the phone profile (`tools/check-phone.mjs`), not assumed.
+  plants. **MEASURED 2026-08-04: 4.8–10.1MB across a six-plant bed at the worst tick, returning
+  to exactly 0 once the plants settle.** `tools/check-growth-fps.mjs` asserts both, and writing
+  the release half of that pair is what found a leak — `releaseGrowth` fired only on the frame
+  the still image was built, so a plant that re-entered growth afterwards held its layers for
+  good. A bound checked only mid-growth would have passed a renderer that never released
+  anything, because it would never have been asked afterwards.
 - **An unexplained measurement.** Supersampling the per-bloom bitmaps did not reduce error
   monotonically — S=3 and S=6 behaved unlike S=1, 2, 4. The design does not depend on
   supersampling, so this is not blocking, but it means the resampling behaviour is not fully

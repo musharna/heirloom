@@ -348,11 +348,14 @@ export function paintPlantGrowing(
   plant: Plant,
   untilTick: number,
   dpr = 1,
-): void {
+): boolean {
   let ls = layers.get(plant);
   if (!ls || ls.dpr !== dpr) {
     const built = build(plant, dpr);
-    if (!built) return;
+    // No usable extent — an empty plant, or one whose bounds are not finite. Say so, so the
+    // caller can fall back to the direct painter. Returning quietly here would render the
+    // plant as nothing at all and look like a plant that never grows.
+    if (!built) return false;
     ls = built;
     layers.set(plant, ls);
   }
@@ -432,14 +435,23 @@ export function paintPlantGrowing(
       blitOpeningPetals(ctx, b, opening(b.tick), dpr);
     ctx.restore();
   }
+  return true;
 }
 
-/** Drop a plant's layers. Called once it settles and the still-image cache takes over. */
+/**
+ * Drop a plant's layers and bitmaps. Called on every frame a plant is drawn from the still
+ * cache, so it has to be cheap when there is nothing to drop — which is all but one of them.
+ */
 export function releaseGrowth(plant: Plant): void {
-  layers.delete(plant);
+  if (!layers.delete(plant)) return;
   // The bitmaps are keyed on Bloom, and a Bloom is reachable from its Plant for as long as the
   // Plant is — so a WeakMap does NOT collect these on its own. A plant released mid-growth
   // would hold every bitmap of every flower that had not finished opening.
+  //
+  // Guarded on the layers because that is what makes the early return above sound: every
+  // bitmap this module creates is created while painting a plant that HAS layers. The one
+  // exception is `blitOpeningPetals` called directly, which only the fidelity gate does, and
+  // there a retained bitmap is the same bitmap it would build again.
   for (const b of plant.blooms) openingPetals.delete(b);
 }
 
@@ -448,14 +460,26 @@ export function openingBitmapCount(plant: Plant): number {
   return plant.blooms.filter((b) => openingPetals.has(b)).length;
 }
 
-/** Approximate bytes held for one plant's layers. For the memory assertion in the driver. */
+/**
+ * Approximate bytes this plant is holding, for the memory bound the driver asserts.
+ *
+ * Counts the per-bloom bitmaps as well as the pass layers. Reporting only the layers would
+ * understate it exactly where it matters: at the worst moment most of the drawn flowers are
+ * mid-opening, so the bitmaps are at their peak at the same time the layers are.
+ */
 export function growingLayerBytes(plant: Plant): number {
   const ls = layers.get(plant);
-  if (!ls) return 0;
-  return PASSES.reduce(
-    (n, name) => n + ls.layer[name].width * ls.layer[name].height * 4,
-    0,
-  );
+  let bytes = 0;
+  if (ls)
+    bytes += PASSES.reduce(
+      (n, name) => n + ls.layer[name].width * ls.layer[name].height * 4,
+      0,
+    );
+  for (const b of plant.blooms) {
+    const bmp = openingPetals.get(b);
+    if (bmp) bytes += bmp.canvas.width * bmp.canvas.height * 4;
+  }
+  return bytes;
 }
 
 /** How many plants currently hold growth layers. Exposed for tests and the driver. */

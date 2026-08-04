@@ -1,5 +1,6 @@
 import type { Plant } from "../types";
 import { paintPlant, plantBounds } from "./stage";
+import { paintPlantGrowing, releaseGrowth } from "./growing";
 
 /**
  * A finished plant is a static picture. Draw it once; blit it afterwards.
@@ -59,9 +60,25 @@ export function paintPlantCached(
   dpr = 1,
 ): void {
   if (untilTick < settledTick) {
-    paintPlant(ctx, plant, untilTick);
+    // Still changing, so a still image is useless — but a full repaint every frame is what
+    // dropped the bed to ~6.5fps for eight seconds after every planting. `growing.ts` keeps
+    // one layer per drawing pass, appends only what has stopped moving, and blits each
+    // opening flower from its own bitmap. It reports false when the plant has no usable
+    // extent, in which case the direct painter is still correct.
+    if (!paintPlantGrowing(ctx, plant, untilTick, dpr))
+      paintPlant(ctx, plant, untilTick);
     return;
   }
+
+  // Settled, so the growth layers and every opening-flower bitmap are dead weight — measured
+  // at 4.79MB across a six-plant bed at the worst tick.
+  //
+  // Released on EVERY settled frame, not on the frame the still image happens to be built.
+  // Tying it to construction leaks: a plant whose still image already exists can re-enter
+  // growth, allocate a fresh set of layers, and never be asked again — measured at 8.6MB still
+  // held. `releaseGrowth` costs one failed WeakMap lookup when there is nothing to release,
+  // which is the case on all but one frame of a plant's life.
+  releaseGrowth(plant);
 
   let entry: Entry | null | undefined = cache.get(plant);
   if (!entry || entry.dpr !== dpr) {

@@ -302,7 +302,11 @@
   // side by side, the way the garden shows them — so the sequence can be watched rather than
   // summarised.
 
-  const FRAME_W = 1240;
+  // Wide enough that no plant is CLIPPED. A first attempt used 1240 — the width of the game's
+  // viewport — and cut the outer two plants off at the canvas edges. A review frame that crops
+  // the picture hides exactly the region a defect could be in, and the reviewer cannot tell a
+  // missing petal from one that was never in shot. `plantBounds` says these reach ~400px across.
+  const FRAME_W = 1800;
   const FRAME_H = 700;
 
   /**

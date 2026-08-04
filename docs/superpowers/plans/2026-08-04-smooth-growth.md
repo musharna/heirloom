@@ -1310,6 +1310,18 @@ git push -u origin feat/growth-render
 gh pr create --draft --base m1-growth-spike --title "Smooth growth"
 ```
 
+**As built — three deviations, each with its reason.**
+
+1. **The bar is `CEILING`, not `OPENING_CEILING`.** Step 2 above was written before Task 5 retracted 56/255 as an absolute bar. It was measured on a 9x nearest-neighbour magnified review rather than on the fractional-coordinate blit the code performs, and a 1:1 blit with no scaling already exceeds it — so asserting it against a whole frame fails on cost the relaxation is not responsible for, and the only way to pass would be to raise it. The relaxation stays bounded separately, against its own reference.
+2. **Frames go to `shots/growth-motion/`, not `tools/out/`.** `shots/` is already gitignored, and the reason is recorded there: tracked screenshots were once 37 MiB of a 65 MB repository. Capture is behind `GROWTH_MOTION_OUT` so CI does not write 132 PNGs nobody opens.
+3. **Capture frames are 1800px wide.** The first attempt used the game's 1240px viewport width and clipped the outer two plants at the canvas edges. A review frame that crops the picture hides the region a defect could be in.
+
+**Mutation results — what the sweep can and cannot see.**
+
+- **Double squash** (the real relaxation bug): caught, 188/255 against a 160 ceiling.
+- **A defect confined to ticks 42–54**, between the sampled ticks 40 and 55: all ten sampled growing checks PASS and only the dense sweep fails, at tick 54. This is the density claim, demonstrated rather than asserted.
+- **A one-frame duplicate draw** (`stillOpening` boundary `>` → `>=`): survives the whole pixel gate, because drawing an opaque flower twice is pixel-neutral. It is a _memory_ bug, not a fidelity one — it leaks a bitmap per flower — and `test/growing.test.ts` catches it exactly, `held` 46 instead of 0. Mutating at the layer the bug lives at is what separated these.
+
 ---
 
 ## Self-Review

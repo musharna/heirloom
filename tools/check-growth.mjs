@@ -360,8 +360,11 @@ function player(ticks) {
   return `<meta charset="utf8"><title>growth in motion — direct vs layered</title>
 <style>
   body { background:#1b1f18; color:#cfd6c6; font:14px/1.5 system-ui, sans-serif; margin:0; padding:16px; }
-  #stage { position:relative; width:1240px; height:700px; max-width:100%; }
-  #stage img { position:absolute; inset:0; width:1240px; height:700px; max-width:100%; image-rendering:pixelated; }
+  /* Natural size, and the page scrolls sideways rather than scaling to fit. A 1x review that
+     quietly downscales to the window is not a 1x review — resampling the comparison is the one
+     thing that would hide the difference being looked for. */
+  #stage { position:relative; width:1800px; height:700px; }
+  #stage img { position:absolute; inset:0; width:1800px; height:700px; image-rendering:pixelated; }
   #stage img.hidden { visibility:hidden; }
   .bar { display:flex; gap:12px; align-items:center; margin:10px 0; flex-wrap:wrap; }
   kbd { background:#333a2e; border-radius:3px; padding:1px 5px; }

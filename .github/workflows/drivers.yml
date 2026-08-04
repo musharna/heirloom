@@ -115,6 +115,11 @@ jobs:
       # bar in it is re-measured in the same run off the shipped `paintPlantCached`, so a runner
       # whose antialiasing differs moves both arms together. `check-growth-fps.mjs` asserts
       # frame-rate floors and stays local with `check-phone.mjs`, for the reason above.
+      # `check-growth-motion.mjs` shares this step because it needs the same dev server, and
+      # because it answers the question the fidelity gate structurally cannot: every comparison
+      # in check-growth is a STILL, so a pop between two frames is invisible to all 284 of them.
+      # It asserts a RATIO between two arms measured in the same run, so nothing in it is a
+      # frame-rate number that would fail to travel to a slower runner.
       - name: the growth-render fidelity gate
         env:
           PROBE_URL: http://127.0.0.1:5199/tools/growth-probe.html
@@ -125,6 +130,7 @@ jobs:
             sleep 1
           done
           node tools/check-growth.mjs
+          node tools/check-growth-motion.mjs
 
       # A driver failure is a VISUAL failure most of the time, and "FAIL — coverage 0" does not
       # say what the screen looked like. The drivers already write PNGs; keep them.

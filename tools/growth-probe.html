@@ -338,6 +338,71 @@
     for (const plant of plants) releaseGrowth(plant);
   };
 
+  /** The bed at one tick, as raw pixels — the same composition `__frame` encodes to a PNG. */
+  function bedPixels(tick, how, dpr) {
+    const c = document.createElement("canvas");
+    c.width = FRAME_W;
+    c.height = FRAME_H;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.fillStyle = "#2b3026";
+    g.fillRect(0, 0, FRAME_W, FRAME_H);
+    const slot = FRAME_W / plants.length;
+    plants.forEach((plant, i) => {
+      g.save();
+      g.translate((i + 0.5) * slot - W / 2, 0);
+      if (how === "layered") paintPlantGrowing(g, plant, tick, dpr);
+      else paintPlant(g, plant, tick);
+      g.restore();
+    });
+    return g.getImageData(0, 0, FRAME_W, FRAME_H).data;
+  }
+
+  /** Mean absolute channel change between two frames — how much the picture MOVED. */
+  function moved(a, b) {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
+    return sum / a.length;
+  }
+
+  /**
+   * How much each painter MOVES from frame to frame, across the whole growth window.
+   *
+   * Everything else in this file compares the two painters AT a tick. None of it can see a
+   * TEMPORAL artefact — a pop when a chain stops being drawn live and starts being blitted from
+   * a baked layer, a flower that jumps the last of its opening, a stutter. Those exist only
+   * BETWEEN frames, and a still taken either side of one looks perfect.
+   *
+   * If growth reads the same, the two delta series track each other. A defect unique to the
+   * layered painter shows up as a frame where it moved much more than the direct painter did
+   * (a pop) or much less (something frozen) — a RATIO away from 1, at one tick, rather than a
+   * few percent spread across all of them.
+   *
+   * Renders its own frames rather than reading the captured PNGs: those are gitignored review
+   * artefacts that only exist after a capture run, so a check that depended on them would be
+   * skipped-by-absence in CI, which reads exactly like a check that passed.
+   */
+  window.__motionSeries = (until = 130, step = 2, dpr = 1) => {
+    const out = [];
+    window.__releaseAll();
+    let prevDirect = null;
+    let prevLayered = null;
+    for (let t = 0; t <= until; t += step) {
+      const d = bedPixels(t, "direct", dpr);
+      // NOT released between ticks — the layered arm accumulates, as the game does.
+      const l = bedPixels(t, "layered", dpr);
+      if (prevDirect)
+        out.push({
+          tick: t,
+          direct: moved(prevDirect, d),
+          layered: moved(prevLayered, l),
+        });
+      prevDirect = d;
+      prevLayered = l;
+    }
+    window.__releaseAll();
+    return out;
+  };
+
   /** How much ink a plant puts on screen — so a comparison of two blank frames cannot pass. */
   window.__ink = (tick) => {
     let inked = 0;

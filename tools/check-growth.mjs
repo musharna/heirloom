@@ -110,14 +110,33 @@ check(
 );
 
 // SETTLED — a like-for-like comparison. Both painters are doing the job they exist for.
+//
+// BOTH arms of the layered painter are measured, because they answer different questions and
+// only one of them existed before the painter became incremental:
+//
+//   "layered" builds every layer inside ONE call. It measures COMPOSITING.
+//   "swept"   paints frame after frame, the way the game does. It measures the INCREMENTAL
+//             BAKE — whether growth accumulated over a hundred frames lands in the same place,
+//             and in the same ORDER, as growth painted in a single go.
+//
+// A one-shot comparison cannot fail on a bad bake, because a bad bake takes two frames to
+// happen. Without the swept arm this file would pass a painter that mis-ordered every stem it
+// ever baked, and the ordering is the thing the pass structure exists to protect.
 for (const tick of SETTLED_TICKS) {
   const cached = await page.evaluate((t) => window.__compare(t, "direct-vs-cached"), tick);
   const layered = await page.evaluate((t) => window.__compare(t, "direct-vs-layered"), tick);
+  const swept = await page.evaluate((t) => window.__compare(t, "direct-vs-swept"), tick);
   check(
     `tick ${tick} settled: layered is no worse than the shipped cache`,
     layered.max <= cached.max + MAX_TOLERANCE &&
       layered.mean <= cached.mean * MEAN_TOLERANCE,
     `layered max ${layered.max}/255 mean ${layered.mean.toFixed(4)} vs cached max ${cached.max}/255 mean ${cached.mean.toFixed(4)}`,
+  );
+  check(
+    `tick ${tick} settled: grown frame-by-frame, it lands in the same place`,
+    swept.max <= cached.max + MAX_TOLERANCE &&
+      swept.mean <= cached.mean * MEAN_TOLERANCE,
+    `swept max ${swept.max}/255 mean ${swept.mean.toFixed(4)} vs cached max ${cached.max}/255 mean ${cached.mean.toFixed(4)}`,
   );
 }
 
@@ -130,10 +149,16 @@ for (const tick of SETTLED_TICKS) {
 // make anything pass; the mean, which is the stable statistic, is held to the reference flat.
 for (const tick of GROWING_TICKS) {
   const layered = await page.evaluate((t) => window.__compare(t, "direct-vs-layered"), tick);
+  const swept = await page.evaluate((t) => window.__compare(t, "direct-vs-swept"), tick);
   check(
     `tick ${tick} growing: layered is within the cache's own error budget`,
     layered.max <= REFERENCE.max * 1.25 && layered.mean <= REFERENCE.mean,
     `layered max ${layered.max}/255 mean ${layered.mean.toFixed(4)} vs reference max ${REFERENCE.max}/255 mean ${REFERENCE.mean.toFixed(4)}`,
+  );
+  check(
+    `tick ${tick} growing: and so is the frame-by-frame bake`,
+    swept.max <= REFERENCE.max * 1.25 && swept.mean <= REFERENCE.mean,
+    `swept max ${swept.max}/255 mean ${swept.mean.toFixed(4)} vs reference max ${REFERENCE.max}/255 mean ${REFERENCE.mean.toFixed(4)}`,
   );
 }
 

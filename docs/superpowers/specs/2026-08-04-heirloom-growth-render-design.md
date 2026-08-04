@@ -101,9 +101,25 @@ Per plant, five offscreen layers matching the five passes. Each frame:
 
 A chain that is still growing cannot be appended to, because its outline is rebuilt from the whole
 smoothed chain and re-drawing it would double-paint. Chains are therefore split: a chain whose last
-segment tick has passed is **terminated** and baked; a chain still growing is drawn live each frame
-into a sixth, transient layer that is cleared every frame and composited at the stem layer's
-position.
+segment tick has passed is **terminated** and baked; a chain still growing is drawn live each frame.
+
+**CORRECTED 2026-08-04, during implementation.** Two details of this section were wrong as first
+written, and both were caught by building it:
+
+- **"A chain whose last segment tick has passed"** has to mean _the last segment in the whole
+  plant_, not the last one visible so far. Judged on visible segments, a chain that pauses looks
+  finished, gets baked as a stale prefix, and is then baked again when it resumes. `growing.ts`
+  precomputes each chain's final tick from `plant.segments`.
+- **"Baked once it is visible" is wrong for blooms.** A flower keeps changing for `OPEN_TICKS`
+  after it appears — `openingAt` scales it further open every frame — so a bloom may only be baked
+  once it has fully opened. Baking on first appearance freezes it at 0.32 of its size permanently.
+
+There is also **no sixth transient layer.** Anything still changing is drawn straight onto the
+target between the layer blits, at its own position in the pass order. That is cheaper (no extra
+clear, no extra blit, no extra allocation) and more faithful (live geometry never resamples), and
+the interleaving is exact rather than approximate: baked items are strictly older than live ones,
+so "baked halos, live halos, baked petals, live petals" is the same sequence as "all halos, then
+all petals" over the whole ordered set.
 
 **The live stem set is NOT negligible at the moment it matters, and the plan must not assume it
 is.** A first pass at this spec claimed growing chains fall to zero before the bloom cost peaks;
@@ -164,6 +180,12 @@ renderer and, as the clock work demonstrated, against a broken version of the th
   render-layer A/B harness that measured a 0.000 noise floor on the petal-shading work.
 - **Fidelity, growing:** same comparison at a sweep of growth ticks. The opening-bloom relaxation
   means the bound there is the measured 21–56/255 worst pixel, asserted as a ceiling.
+- **Fidelity, ACCUMULATED — added 2026-08-04.** Every comparison above renders the plant in a
+  single call, and a comparison that renders in one call cannot fail on a bad incremental bake,
+  because a bad bake takes two frames to happen. So each of them runs a second time against a
+  plant painted **frame by frame from tick 0**, the way the game paints it. This is not
+  belt-and-braces: implemented against the first version of the "is this chain finished?" test,
+  every one-shot check passed and seven frame-by-frame checks failed.
 - **Ordering:** an explicit test that a bloom present at tick T is still present at every tick
   after T, across many random genomes. This is §3.1(2) and the design fails without it.
 - **Performance:** `tools/check-growth.mjs` asserts the growth phase clears the same 30fps floor

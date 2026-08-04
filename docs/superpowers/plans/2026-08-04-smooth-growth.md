@@ -32,7 +32,7 @@
 | `src/render/growing.ts` (create)                         | the layered growth cache. One job: draw a plant that is still changing                       |
 | `src/render/cache.ts` (modify)                           | routes below the settle tick into `growing.ts`                                               |
 | `tools/check-growth.mjs` (create)                        | frame-rate floor + pixel fidelity, in a real browser                                         |
-| `tools/growth-probe.html` (create) | dev-only page the driver drives; not a build input |
+| `tools/growth-probe.html` (create)                       | dev-only page the driver drives; not a build input                                           |
 | `package.json`, `.github/workflows/drivers.yml` (modify) | wire the new driver into `npm run drive` and CI                                              |
 
 ---
@@ -771,7 +771,8 @@ Unit tests cannot see pixels. This is the task that actually holds the fidelity 
  */
 import { chromium } from "playwright";
 
-const URL = process.env.PROBE_URL ?? "http://localhost:5173/tools/growth-probe.html";
+const URL =
+  process.env.PROBE_URL ?? "http://localhost:5173/tools/growth-probe.html";
 const FLOOR = 3; // max channel delta, from the design spec
 const OPENING_CEILING = 56; // the one relaxation: a flower mid-opening
 
@@ -949,6 +950,26 @@ layer composite order, with both controls still passing."
 ### Task 6: Make it incremental
 
 Only now does anything get faster.
+
+> **AS BUILT, 2026-08-04.** Three things below are wrong and were corrected while implementing;
+> the spec's §3.2 records the same corrections. Read these before the steps:
+>
+> 1. **`const newBlooms = blooms.filter((b) => b.tick > from)` bakes a flower the moment it
+>    appears.** A flower keeps changing for `OPEN_TICKS` afterwards — `openingAt` opens it a
+>    little further every frame — so baking it on arrival freezes it at 0.32 of its size for
+>    good. The threshold is `untilTick - OPEN_TICKS`, not `untilTick`.
+> 2. **`chain[chain.length - 1]` is the last VISIBLE segment, not the chain's last segment.** A
+>    chain that pauses reads as finished, gets baked as a stale prefix, and is baked again when
+>    it resumes. `growing.ts` precomputes each chain's final tick from `plant.segments` once.
+> 3. **There is no sixth transient layer.** Live geometry is drawn straight onto the target
+>    between the layer blits, at its own place in the pass order — one fewer clear, one fewer
+>    blit, one fewer allocation, and no resampling of the part that is moving.
+>
+> Step 2's test was also replaced. `expect(petalDraws).toBeLessThan(once * 40)` is a bound with
+> no derivation, and `40` would have been tuned until it passed. What shipped instead compares
+> the fills the layers receive over 101 frames against the fills ONE full paint costs, and
+> asserts they are **equal** — each finished thing baked exactly once, nothing baked twice,
+> nothing missed.
 
 **Files:**
 

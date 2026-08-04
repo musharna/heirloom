@@ -1,5 +1,6 @@
-import type { Plant } from "../types";
+import type { Bloom, Plant, StrokeSegment } from "../types";
 import {
+  OPEN_TICKS,
   bloomsFor,
   chainsFor,
   openingAt,
@@ -40,7 +41,29 @@ import {
  * Pixel-identical is not achievable here by any design, and sway settles the question anyway:
  * a plant must be painted at rest and sheared as a blit.
  *
- * This file is deliberately NOT incremental yet. It proves the layering is faithful first.
+ * ## What is baked, and what is redrawn
+ *
+ * Only what has STOPPED CHANGING is baked, and "stopped" is not the same as "visible":
+ *
+ * - A **chain** is finished when its last segment has appeared. That is decided against the
+ *   whole plant (`chainEnd` below), not against the segments visible so far — a chain that
+ *   pauses would otherwise look finished, get baked as a stale prefix, and then grow again.
+ * - A **leaf** is finished the moment it appears. `paintLeafPass` takes no tick and leaves have
+ *   no entrance animation, so a visible leaf is a final leaf.
+ * - A **bloom** is finished only once it has FULLY OPENED, at `OPEN_TICKS` after its tick.
+ *   Before that, `openingAt` scales it a little further open every frame. Baking a bloom when
+ *   it first becomes visible — which is what an earlier draft of this file's plan said to do —
+ *   would freeze it at 0.32 of its size for the rest of the game.
+ *
+ * Anything still changing is drawn STRAIGHT ONTO THE TARGET, in between the layer blits, at the
+ * point in the pass order where it belongs. That needs no transient layers, costs one less
+ * clear and one less blit than routing it through one, and is the more faithful of the two:
+ * live geometry lands on the canvas without a resampling step.
+ *
+ * The interleaving is exact rather than approximate. Baked blooms are strictly older than live
+ * ones — the drawn set only ever appends (`test/growing.test.ts`) — so "all baked halos, then
+ * all live halos, then all baked petals, then all live petals" is the same sequence as "all
+ * halos, then all petals" over the whole ordered set.
  */
 
 /** Room around the bounding box for halos and rim strokes, which sit outside the geometry. */
@@ -63,6 +86,16 @@ type Layers = {
   w: number;
   h: number;
   dpr: number;
+  /**
+   * The `untilTick` the layers are current to. Everything that had finished changing by this
+   * tick is already painted into them. `-Infinity` means nothing has been baked yet.
+   */
+  bakedTick: number;
+  /**
+   * The tick of each chain's LAST segment, over the whole plant — so "this chain has finished"
+   * is a fact about the plant rather than an inference from what happens to be visible.
+   */
+  chainEnd: Map<number, number>;
 };
 
 let makeCanvas: () => HTMLCanvasElement = () =>
@@ -112,7 +145,23 @@ function build(plant: Plant, dpr: number): Layers | null {
     g.translate(-b.minX + PAD, -b.minY + PAD);
     layer[name] = c;
   }
-  return { layer, x: b.minX - PAD, y: b.minY - PAD, w, h, dpr };
+
+  const chainEnd = new Map<number, number>();
+  for (const s of plant.segments) {
+    const end = chainEnd.get(s.chain);
+    if (end === undefined || s.tick > end) chainEnd.set(s.chain, s.tick);
+  }
+
+  return {
+    layer,
+    x: b.minX - PAD,
+    y: b.minY - PAD,
+    w,
+    h,
+    dpr,
+    bakedTick: -Infinity,
+    chainEnd,
+  };
 }
 
 /** Wipe a layer without disturbing the world-coordinate transform baked into its context. */
@@ -123,6 +172,30 @@ function clear(c: HTMLCanvasElement): void {
   g.setTransform(1, 0, 0, 1, 0, 0);
   g.clearRect(0, 0, c.width, c.height);
   g.restore();
+}
+
+/** A fully open flower. What every baked bloom is drawn at, by definition of being baked. */
+const FULLY_OPEN = (): number => 1;
+
+/**
+ * The three bloom passes, wrapped exactly as `paintPlant` wraps them.
+ *
+ * `paintPlant` puts one `save`/`shadowBlur = 0`/`restore` around all three. A single wrapper
+ * cannot span three separate layer contexts, so it is applied per context instead — which is
+ * equivalent, because the only state it sets is reset the same way each time.
+ */
+function bloomPasses(
+  ctx: CanvasRenderingContext2D,
+  blooms: Bloom[],
+  opening: (tick: number) => number,
+  pass: "halos" | "petals" | "centres",
+): void {
+  ctx.save();
+  ctx.shadowBlur = 0;
+  if (pass === "halos") paintHaloPass(ctx, blooms, opening);
+  else if (pass === "petals") paintPetalPass(ctx, blooms, opening);
+  else paintCentrePass(ctx, blooms, opening);
+  ctx.restore();
 }
 
 /**
@@ -145,35 +218,66 @@ export function paintPlantGrowing(
     layers.set(plant, ls);
   }
 
+  // Growth only runs forwards. A caller that steps BACKWARDS — a test sweeping ticks, the
+  // fidelity probe re-rendering the same plant at tick 20 after tick 140 — would otherwise be
+  // handed layers holding growth that has not happened yet. Start over rather than serve that.
+  if (untilTick < ls.bakedTick) {
+    for (const name of PASSES) clear(ls.layer[name]);
+    ls.bakedTick = -Infinity;
+  }
+
+  const from = ls.bakedTick;
   const opening = (tick: number): number => openingAt(untilTick, tick);
-  const blooms = bloomsFor(plant, untilTick);
   const ctxOf = (name: PassName): CanvasRenderingContext2D =>
     ls.layer[name].getContext("2d") as CanvasRenderingContext2D;
 
-  for (const name of PASSES) clear(ls.layer[name]);
-
-  paintStemPass(ctxOf("stems"), plant, chainsFor(plant, untilTick));
-  paintLeafPass(
-    ctxOf("leaves"),
-    plant,
-    plant.leaves.filter((lf) => lf.tick <= untilTick),
-  );
-  // The save/shadowBlur wrapper that `paintPlant` puts around all three bloom passes is applied
-  // per layer here. Each layer is a separate context, so a single wrapper could not span them.
-  for (const [name, pass] of [
-    ["halos", paintHaloPass],
-    ["petals", paintPetalPass],
-    ["centres", paintCentrePass],
-  ] as const) {
-    const g = ctxOf(name);
-    g.save();
-    g.shadowBlur = 0;
-    pass(g, blooms, opening);
-    g.restore();
+  // ---- STEMS ---------------------------------------------------------------------------
+  // A chain still growing cannot be appended to: its outline is rebuilt from the whole
+  // smoothed chain every frame, so drawing the new part alone would leave a seam and drawing
+  // the whole thing again would double-paint. Finished chains are baked once; the rest are
+  // redrawn live.
+  const live: StrokeSegment[][] = [];
+  const newlyFinished: StrokeSegment[][] = [];
+  for (const chain of chainsFor(plant, untilTick)) {
+    const end = ls.chainEnd.get(chain[0]!.chain) ?? -Infinity;
+    if (end > untilTick) live.push(chain);
+    else if (end > from) newlyFinished.push(chain);
   }
+  if (newlyFinished.length) paintStemPass(ctxOf("stems"), plant, newlyFinished);
 
-  for (const name of PASSES)
+  // ---- LEAVES --------------------------------------------------------------------------
+  const newLeaves = plant.leaves.filter(
+    (lf) => lf.tick > from && lf.tick <= untilTick,
+  );
+  if (newLeaves.length) paintLeafPass(ctxOf("leaves"), plant, newLeaves);
+
+  // ---- BLOOMS --------------------------------------------------------------------------
+  // The threshold is the tick at which a flower has FINISHED opening, not the tick it appears.
+  const blooms = bloomsFor(plant, untilTick);
+  const openedBy = untilTick - OPEN_TICKS;
+  const openedBefore = from - OPEN_TICKS;
+  const newlyOpen = blooms.filter(
+    (b) => b.tick > openedBefore && b.tick <= openedBy,
+  );
+  const opening_ = blooms.filter((b) => b.tick > openedBy);
+  if (newlyOpen.length)
+    for (const pass of ["halos", "petals", "centres"] as const)
+      bloomPasses(ctxOf(pass), newlyOpen, FULLY_OPEN, pass);
+
+  ls.bakedTick = untilTick;
+
+  // ---- COMPOSITE -----------------------------------------------------------------------
+  // Each layer, then whatever is still moving in that pass, at the pass's own position.
+  const blit = (name: PassName): void => {
     ctx.drawImage(ls.layer[name], ls.x, ls.y, ls.w, ls.h);
+  };
+  blit("stems");
+  if (live.length) paintStemPass(ctx, plant, live);
+  blit("leaves");
+  for (const pass of ["halos", "petals", "centres"] as const) {
+    blit(pass);
+    if (opening_.length) bloomPasses(ctx, opening_, opening, pass);
+  }
 }
 
 /** Drop a plant's layers. Called once it settles and the still-image cache takes over. */

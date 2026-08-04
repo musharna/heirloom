@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bloomsFor } from "../src/render/stage";
+import { bloomsFor, paintPlant } from "../src/render/stage";
 import {
   growingCount,
   growingLayerBytes,
@@ -126,12 +126,77 @@ describe("the layered painter draws the same passes in the same order", () => {
       const { ctx } = recordingContext();
       paintPlantGrowing(ctx, plant, 90, 1);
       for (const [i, ops] of sink.entries()) {
-        expect(ops.some((o) => o.startsWith("fill(")), `layer ${i} drew nothing`).toBe(true);
+        expect(
+          ops.some((o) => o.startsWith("fill(")),
+          `layer ${i} drew nothing`,
+        ).toBe(true);
       }
     } finally {
       setGrowthCanvasSource(was);
       releaseGrowth(plant);
     }
+  });
+
+  /**
+   * The test that the work is actually being SAVED.
+   *
+   * Task 5's fidelity gate compares pixels, so it passes just as happily against a painter that
+   * redraws the entire plant every frame — which is what the previous version of this file did.
+   * Only counting draw calls can tell the difference.
+   */
+  it("puts exactly one plant's worth of drawing into the layers, over 101 frames", () => {
+    const rand = mulberry32(31337);
+    const plant = growPlant(express(randomGenome(rand)), 909, { x: 0, y: 0 });
+    const sink: string[][] = [];
+    const was = setGrowthCanvasSource(recordingCanvas(sink));
+    let baked = 0;
+    try {
+      const { ctx } = recordingContext();
+      for (let t = 0; t <= 200; t += 2) paintPlantGrowing(ctx, plant, t, 1);
+      baked = sink.flat().filter((o) => o.startsWith("fill(")).length;
+    } finally {
+      setGrowthCanvasSource(was);
+      releaseGrowth(plant);
+    }
+
+    // What ONE full paint of the finished plant costs. Every stem, leaf and bloom, once.
+    const one = recordingContext();
+    paintPlant(one.ctx, plant, 200);
+    const single = one.ops.filter((o) => o.startsWith("fill(")).length;
+
+    // POSITIVE CONTROL: an empty plant would satisfy any equality between two zeroes.
+    expect(single).toBeGreaterThan(100);
+    // The claim, exactly: across 101 frames the layers received each finished thing ONCE.
+    // Anything double-baked pushes this above `single`; anything never baked pulls it below.
+    expect(baked).toBe(single);
+  });
+
+  it("CONTROL: the painter it replaces costs ~5x more over the identical sweep", () => {
+    // "Each thing once" is only interesting if the alternative is not also each thing once.
+    // Both arms paint the same plant at the same 21 ticks; only the bookkeeping differs.
+    const rand = mulberry32(31337);
+    const plant = growPlant(express(randomGenome(rand)), 909, { x: 0, y: 0 });
+    const fills = (ops: string[]): number =>
+      ops.filter((o) => o.startsWith("fill(")).length;
+
+    const sink: string[][] = [];
+    const was = setGrowthCanvasSource(recordingCanvas(sink));
+    let incremental = 0;
+    try {
+      const { ctx, ops } = recordingContext();
+      for (let t = 0; t <= 200; t += 10) paintPlantGrowing(ctx, plant, t, 1);
+      // Both halves count: what was baked into layers AND what was redrawn live each frame.
+      incremental = fills(sink.flat()) + fills(ops);
+    } finally {
+      setGrowthCanvasSource(was);
+      releaseGrowth(plant);
+    }
+
+    const naive = recordingContext();
+    for (let t = 0; t <= 200; t += 10) paintPlant(naive.ctx, plant, t);
+
+    expect(incremental).toBeGreaterThan(0);
+    expect(fills(naive.ops) / incremental).toBeGreaterThan(3);
   });
 
   it("holds layers per plant and releases them on request", () => {

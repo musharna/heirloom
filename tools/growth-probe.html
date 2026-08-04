@@ -51,9 +51,35 @@
   }
 
   /**
+   * Paint a plant the way the GAME does: one frame after another, letting the layers
+   * accumulate, and only then read the result.
+   *
+   * `draw("layered", …)` builds every layer inside a SINGLE call, because the caller releases
+   * the plant between comparisons. That measures compositing, but it cannot measure
+   * incrementality — a bake that lands in the wrong order relative to an earlier frame's, or a
+   * piece of growth drawn into a layer twice, needs more than one frame to exist at all. This
+   * drives the whole sweep and throws the intermediate frames away.
+   */
+  function drawSwept(plant, tick, dpr = 1, step = 4) {
+    const c = mk();
+    const g = c.getContext("2d");
+    g.fillStyle = "#2b3026";
+    g.fillRect(0, 0, W, H);
+    releaseGrowth(plant);
+    const scratch = mk().getContext("2d");
+    // Nothing changes after growth ends, so a settled tick sweeps the growth window then jumps.
+    const last = Math.min(tick, 240);
+    for (let t = 0; t < last; t += step)
+      paintPlantGrowing(scratch, plant, t, dpr);
+    paintPlantGrowing(g, plant, tick, dpr);
+    return g.getImageData(0, 0, W, H).data;
+  }
+
+  /**
    * @param mode direct-vs-direct   — must be exactly zero, or the harness cannot report zero
    *             direct-vs-shifted  — must be non-zero, or the harness cannot report a difference
-   *             direct-vs-layered  — the actual question
+   *             direct-vs-layered  — one-shot: does the compositing hold?
+   *             direct-vs-swept    — frame after frame: does the INCREMENTAL bake hold?
    */
   window.__compare = (tick, mode, dpr = 1) => {
     let max = 0;
@@ -69,7 +95,9 @@
             ? draw("direct", plant, tick, 1)
             : mode === "direct-vs-cached"
               ? draw("cached", plant, tick, 0, dpr)
-              : draw("layered", plant, tick, 0, dpr);
+              : mode === "direct-vs-swept"
+                ? drawSwept(plant, tick, dpr)
+                : draw("layered", plant, tick, 0, dpr);
       for (let i = 0; i < a.length; i++) {
         const d = Math.abs(a[i] - b[i]);
         if (d) {
@@ -108,26 +136,34 @@
     const a = draw("direct", plant, tick);
     const b = draw("layered", plant, tick);
     releaseGrowth(plant);
-    let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+    let minX = 1e9,
+      minY = 1e9,
+      maxX = -1,
+      maxY = -1;
     const grid = Array.from({ length: rows }, () => new Array(cols).fill(0));
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const i = (y * W + x) * 4;
         let d = 0;
-        for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(a[i + c] - b[i + c]));
+        for (let c = 0; c < 3; c++)
+          d = Math.max(d, Math.abs(a[i + c] - b[i + c]));
         if (d > 3) {
           if (x < minX) minX = x;
           if (y < minY) minY = y;
           if (x > maxX) maxX = x;
           if (y > maxY) maxY = y;
-          const gy = Math.floor((y / H) * rows), gx = Math.floor((x / W) * cols);
+          const gy = Math.floor((y / H) * rows),
+            gx = Math.floor((x / W) * cols);
           if (d > grid[gy][gx]) grid[gy][gx] = d;
         }
       }
     }
     // Where the plant itself is, for comparison — a difference confined to the plant's edge
     // means something different from one spread across its body.
-    let pminX = 1e9, pminY = 1e9, pmaxX = -1, pmaxY = -1;
+    let pminX = 1e9,
+      pminY = 1e9,
+      pmaxX = -1,
+      pmaxY = -1;
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const i = (y * W + x) * 4;
@@ -140,8 +176,16 @@
       }
     }
     const ramp = " .:-=+*#%@";
-    const art = grid.map((r) => r.map((v) => (v ? ramp[Math.min(9, Math.ceil(v / 12))] : " ")).join("")).join("\n");
-    return { diffBox: [minX, minY, maxX, maxY], plantBox: [pminX, pminY, pmaxX, pmaxY], art };
+    const art = grid
+      .map((r) =>
+        r.map((v) => (v ? ramp[Math.min(9, Math.ceil(v / 12))] : " ")).join(""),
+      )
+      .join("\n");
+    return {
+      diffBox: [minX, minY, maxX, maxY],
+      plantBox: [pminX, pminY, pmaxX, pmaxY],
+      art,
+    };
   };
 
   // A sentinel, so a driver that gets Vite's SPA fallback — or another project's dev

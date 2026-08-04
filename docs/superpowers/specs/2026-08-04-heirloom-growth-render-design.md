@@ -50,10 +50,7 @@ thing that changes is `untilTick < settledTick` flipping in `paintPlantCached`
 `paintPlantCached`, measured with the same instrument.**
 
 This is not a budget chosen to fit the implementation. Compositing through an offscreen surface
-costs up to **3/255 on ~11% of channels** — measured with a control that routes the _same_
-drawing through one intermediate canvas with no pass-splitting at all, so the cost is intrinsic to
-8-bit premultiplied compositing rather than to this architecture. Splitting into three pass layers
-adds ~1.5 percentage points on top.
+costs far more than it appears to. **CORRECTED 2026-08-04, after implementation measured it:** the SHIPPED `paintPlantCached` differs from a direct paint by **max 104/255 on 3.68% of channels, mean 0.4257** — measured 2026-08-04 with the same instrument the gate uses. An earlier figure of 3/255 was WRONG: it came from a synthetic probe compositing aligned, same-size canvases, which is not what either painter does. Both blit an integer-sized bitmap to FRACTIONAL world coordinates (`ctx.drawImage(canvas, x, y, w, h)` with x and w fractional), so the whole image is resampled. The layered painter measures 105/255, mean 0.4245 — the same thing.
 
 Pixel-identical is therefore impossible for any design here, and sway forces the issue: a plant
 must be painted at rest and sheared as a blit, so there is no version that accumulates directly on
@@ -162,7 +159,8 @@ pixel-neutral on its own before any caching is added.
 renderer and, as the clock work demonstrated, against a broken version of the thing under test. So:
 
 - **Fidelity, settled:** a settled plant painted through the new path must match one painted
-  through `paintPlant` within the compositing floor (max 3/255). The instrument is the
+  through `paintPlant` no worse than the shipped `paintPlantCached` does, re-measured in the
+  same run rather than against a constant. The instrument is the
   render-layer A/B harness that measured a 0.000 noise floor on the petal-shading work.
 - **Fidelity, growing:** same comparison at a sweep of growth ticks. The opening-bloom relaxation
   means the bound there is the measured 21–56/255 worst pixel, asserted as a ceiling.

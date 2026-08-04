@@ -27,12 +27,18 @@ import {
  * compositing is associative: drawing into a transparent layer and compositing it equals drawing
  * directly, up to 8-bit quantisation.
  *
- * That quantisation is real and is the accepted cost. Routing any drawing through an offscreen
- * surface differs from a direct paint by up to 3/255 on ~11% of channels, measured with a
- * control that used ONE intermediate canvas and no pass-splitting — so it is intrinsic to
- * compositing, not to this architecture. `paintPlantCached` has always paid it for settled
- * plants. Pixel-identical is not achievable here by any design, and sway settles the question
- * anyway: a plant must be painted at rest and sheared as a blit.
+ * That quantisation is real and is the accepted cost, and it is LARGER than it first looks.
+ * Measured 2026-08-04 with the gate's own instrument, the shipped `paintPlantCached` differs
+ * from a direct paint by max 104/255 on 3.68% of channels, mean 0.4257 — and this painter comes
+ * in at 105/255, mean 0.4245, which is the same thing.
+ *
+ * An earlier figure of 3/255 was wrong and is worth recording as wrong: it was measured on a
+ * synthetic probe that composited aligned, same-size canvases. Neither painter does that. Both
+ * blit an integer-sized bitmap to FRACTIONAL world coordinates — `drawImage(canvas, x, y, w, h)`
+ * where x and w are fractional — so the entire image is resampled, and that dominates.
+ *
+ * Pixel-identical is not achievable here by any design, and sway settles the question anyway:
+ * a plant must be painted at rest and sheared as a blit.
  *
  * This file is deliberately NOT incremental yet. It proves the layering is faithful first.
  */

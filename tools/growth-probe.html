@@ -1,0 +1,151 @@
+<meta charset="utf8" />
+<title>growth render probe</title>
+<!--
+  Renders the same plant through both painters so `tools/check-growth.mjs` can diff them.
+
+  Dev-only: `vite.config.ts` builds exactly four inputs (index, garden, lookdev, visit), so this
+  page is served by the dev server and never enters the production bundle.
+-->
+<script type="module">
+  import { paintPlant } from "/src/render/stage.ts";
+  import { paintPlantGrowing, releaseGrowth } from "/src/render/growing.ts";
+  import { paintPlantCached } from "/src/render/cache.ts";
+  import { growPlant } from "/src/growth/sim.ts";
+  import { randomGenome } from "/src/genome/genome.ts";
+  import { express } from "/src/genome/express.ts";
+  import { mulberry32 } from "/src/rng.ts";
+
+  const W = 900;
+  const H = 700;
+
+  const rand = mulberry32(20260804);
+  const plants = Array.from({ length: 4 }, () =>
+    growPlant(express(randomGenome(rand)), (rand() * 1e9) | 0, {
+      x: W / 2,
+      y: H - 40,
+    }),
+  );
+
+  const mk = () => {
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    return c;
+  };
+
+  function draw(how, plant, tick, dx = 0, dpr = 1) {
+    const c = mk();
+    const g = c.getContext("2d");
+    // A neutral ground, so alpha differences show up as colour differences the way they do in
+    // the game rather than being invisible against transparency.
+    g.fillStyle = "#2b3026";
+    g.fillRect(0, 0, W, H);
+    g.translate(dx, 0);
+    if (how === "layered") paintPlantGrowing(g, plant, tick, dpr);
+    // The SHIPPED still-image cache. Its error against a direct paint is the bar the design
+    // asks for — "no worse than what paintPlantCached already does" — and it has to be
+    // measured with this same instrument rather than inferred from a synthetic probe.
+    else if (how === "cached") paintPlantCached(g, plant, tick, -Infinity, dpr);
+    else paintPlant(g, plant, tick);
+    return g.getImageData(0, 0, W, H).data;
+  }
+
+  /**
+   * @param mode direct-vs-direct   — must be exactly zero, or the harness cannot report zero
+   *             direct-vs-shifted  — must be non-zero, or the harness cannot report a difference
+   *             direct-vs-layered  — the actual question
+   */
+  window.__compare = (tick, mode, dpr = 1) => {
+    let max = 0;
+    let differing = 0;
+    let total = 0;
+    let sum = 0;
+    for (const plant of plants) {
+      const a = draw("direct", plant, tick);
+      const b =
+        mode === "direct-vs-direct"
+          ? draw("direct", plant, tick)
+          : mode === "direct-vs-shifted"
+            ? draw("direct", plant, tick, 1)
+            : mode === "direct-vs-cached"
+              ? draw("cached", plant, tick, 0, dpr)
+              : draw("layered", plant, tick, 0, dpr);
+      for (let i = 0; i < a.length; i++) {
+        const d = Math.abs(a[i] - b[i]);
+        if (d) {
+          differing++;
+          sum += d;
+          if (d > max) max = d;
+        }
+        total++;
+      }
+      releaseGrowth(plant);
+    }
+    return {
+      max,
+      differing,
+      pct: (100 * differing) / total,
+      mean: sum / total,
+    };
+  };
+
+  /** How much ink a plant puts on screen — so a comparison of two blank frames cannot pass. */
+  window.__ink = (tick) => {
+    let inked = 0;
+    for (const plant of plants) {
+      const a = draw("direct", plant, tick);
+      for (let i = 0; i < a.length; i += 4) {
+        // Anything that is not the flat backdrop counts as drawing.
+        if (a[i] !== 0x2b || a[i + 1] !== 0x30 || a[i + 2] !== 0x26) inked++;
+      }
+    }
+    return inked;
+  };
+
+  /** WHERE the two arms differ: bounding box plus a coarse map, so a guess is unnecessary. */
+  window.__diffMap = (tick, cols = 60, rows = 24) => {
+    const plant = plants[0];
+    const a = draw("direct", plant, tick);
+    const b = draw("layered", plant, tick);
+    releaseGrowth(plant);
+    let minX = 1e9, minY = 1e9, maxX = -1, maxY = -1;
+    const grid = Array.from({ length: rows }, () => new Array(cols).fill(0));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        let d = 0;
+        for (let c = 0; c < 3; c++) d = Math.max(d, Math.abs(a[i + c] - b[i + c]));
+        if (d > 3) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+          const gy = Math.floor((y / H) * rows), gx = Math.floor((x / W) * cols);
+          if (d > grid[gy][gx]) grid[gy][gx] = d;
+        }
+      }
+    }
+    // Where the plant itself is, for comparison — a difference confined to the plant's edge
+    // means something different from one spread across its body.
+    let pminX = 1e9, pminY = 1e9, pmaxX = -1, pmaxY = -1;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        if (a[i] !== 0x2b || a[i + 1] !== 0x30 || a[i + 2] !== 0x26) {
+          if (x < pminX) pminX = x;
+          if (y < pminY) pminY = y;
+          if (x > pmaxX) pmaxX = x;
+          if (y > pmaxY) pmaxY = y;
+        }
+      }
+    }
+    const ramp = " .:-=+*#%@";
+    const art = grid.map((r) => r.map((v) => (v ? ramp[Math.min(9, Math.ceil(v / 12))] : " ")).join("")).join("\n");
+    return { diffBox: [minX, minY, maxX, maxY], plantBox: [pminX, pminY, pmaxX, pmaxY], art };
+  };
+
+  // A sentinel, so a driver that gets Vite's SPA fallback — or another project's dev
+  // server on the same port — fails with a sentence instead of a timeout.
+  window.__probeName = "heirloom-growth";
+  window.__ready = true;
+</script>

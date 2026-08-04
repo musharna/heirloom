@@ -13,8 +13,11 @@ import type { ReplayEntry } from "./save";
  * reference them rather than restating them: a test that hard-codes 0.15 stops testing the
  * constant the moment the constant moves.
  *
- * Durations are TICKS, not seconds. `SPEED` is 1.4 per frame at 60fps, so a second is about 84
- * ticks and a value that looks like a number of seconds is off by two orders of magnitude.
+ * Durations are TICKS, not seconds — MOTION ticks, since carriers are ambience rather than
+ * growth. `MOTION_TICKS_PER_SECOND` is 84, so a value that looks like a number of seconds is off
+ * by two orders of magnitude. That 84 used to be an approximation — 1.4 per frame, assuming
+ * 60fps — which meant these durations silently stretched on any machine that missed the frame
+ * rate. It is now the definition, so a second is a second.
  */
 
 /** How many pollen-free insects may be drifting through at once. */

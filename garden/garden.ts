@@ -77,7 +77,12 @@ import type { Genome } from "../src/genome/genome";
 import { genomeSeed, parseGenome, serialize } from "../src/genome/serialize";
 import { Forest } from "../src/render/accumulate";
 import { paintThumb } from "../src/render/thumb";
-import { RECEDE_TICKS, SPEED } from "../src/render/motion";
+import {
+  GROWTH_TICKS_PER_SECOND,
+  MOTION_TICKS_PER_SECOND,
+  RECEDE_TICKS,
+  ticksElapsed,
+} from "../src/render/motion";
 import { placeRetired, type Placement } from "../src/render/forest";
 import { bedDepth, toCanvasSpace, toPlotSpace } from "../src/render/bed";
 import { mulberry32 } from "../src/rng";
@@ -310,7 +315,46 @@ function takeSharedGenome(): void {
 
 window.addEventListener("hashchange", takeSharedGenome);
 
-let now = 0;
+/**
+ * The growth clock: plant ages, flowers opening, and everything derived from them.
+ *
+ * Advanced by ELAPSED TIME, not by frame count. It used to be `now += SPEED` once per
+ * animation frame, which made a plant's growth duration a function of the renderer's speed —
+ * see `src/render/motion.ts` for the measurement and why the replacement needs two rates.
+ *
+ * Saves and postcards store ages against this clock and its unit is unchanged, so both formats
+ * round-trip exactly as before.
+ */
+let growthNow = 0;
+
+/**
+ * The motion clock: sway, gusts, insects, the recede animation, the plant-flash.
+ *
+ * Separate from `growthNow` because it runs ~5x faster. `drawScene` has taken both clocks since
+ * the visit page was added — a visit pins growth and keeps motion running — and until now the
+ * garden passed the same value for each. It no longer can: the two tempos are different.
+ */
+let motionNow = 0;
+
+/** Timestamp of the previous frame, for the elapsed-time deltas. Null until the first frame. */
+let lastFrameMs: number | null = null;
+
+/**
+ * Hiding the tab pauses the garden; showing it resumes without a jump.
+ *
+ * Time-based clocks keep running while a tab is backgrounded even though nothing is drawn, so
+ * the first frame back would otherwise carry the entire absence and grow every plant at once.
+ * Dropping the reference timestamp makes that frame advance nothing, which is what frame
+ * counting did for free.
+ *
+ * This is here rather than in `MAX_FRAME_MS` because a duration cannot tell an unrendered tab
+ * from a slow frame, and a growing bed's frames are genuinely slow — 154ms at the measured
+ * 6.5fps. The browser states visibility directly; the cap is only a backstop for stalls it
+ * does not cover.
+ */
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") lastFrameMs = null;
+});
 
 /**
  * The accumulating background. Everything ever displaced from a plot lives here as pixels.
@@ -514,7 +558,7 @@ function writeSave(): void {
   try {
     localStorage.setItem(
       SAVE_KEY,
-      JSON.stringify(toSave(garden, now, retirementLog, notebook)),
+      JSON.stringify(toSave(garden, growthNow, retirementLog, notebook)),
     );
   } catch (e) {
     // Quota exceeded, private mode, disabled storage. Say so — a garden that silently stops
@@ -644,7 +688,7 @@ canvas.addEventListener("pointerdown", (e) => {
     drag = { kind: "seed", id: seed, from: p };
     return;
   }
-  const hit = bloomAt(garden, p, now, 1.15, localToPlot);
+  const hit = bloomAt(garden, p, growthNow, 1.15, localToPlot);
   if (hit) {
     drag = {
       kind: "bloom",
@@ -692,12 +736,14 @@ function syncA11y(): void {
   const sig =
     `${garden.tray.length}|${carrying.length}|` +
     garden.plots
-      .map((p) => (!p.occupant ? "-" : isGrown(p.occupant, now) ? "g" : "w"))
+      .map((p) =>
+        !p.occupant ? "-" : isGrown(p.occupant, growthNow) ? "g" : "w",
+      )
       .join("");
   if (sig === a11ySig) return;
   a11ySig = sig;
   syncMirror(
-    garden.plots.map((p, i) => plotLabel(i, p.occupant, now)),
+    garden.plots.map((p, i) => plotLabel(i, p.occupant, growthNow)),
     garden.tray.map((_, i) => seedLabel(i, garden.tray.length)),
     carrying.map((c) => carrierLabel(c.pollen!)),
   );
@@ -727,7 +773,7 @@ function doCross(
     origin,
   });
   learn("cross");
-  flash = { at, until: now + FLASH_TICKS };
+  flash = { at, until: motionNow + FLASH_TICKS };
 }
 
 function doSelf(g: Genome, at: Vec2): void {
@@ -736,7 +782,7 @@ function doSelf(g: Genome, at: Vec2): void {
     origin: "self",
   });
   learn("self");
-  flash = { at, until: now + FLASH_TICKS };
+  flash = { at, until: motionNow + FLASH_TICKS };
 }
 
 function doClone(g: Genome, at: Vec2): void {
@@ -745,18 +791,21 @@ function doClone(g: Genome, at: Vec2): void {
     origin: "clone",
   });
   learn("clone");
-  flash = { at, until: now + FLASH_TICKS };
+  flash = { at, until: motionNow + FLASH_TICKS };
 }
 
 function doSplice(aId: number, bId: number, at: Vec2): void {
   garden = spliceSeeds(garden, aId, bId, rand);
-  flash = { at, until: now + FLASH_TICKS };
+  flash = { at, until: motionNow + FLASH_TICKS };
 }
 
 function doPlant(seedId: number, plotIndex: number): void {
-  garden = plantSeed(garden, seedId, plotIndex, SOIL, now);
+  garden = plantSeed(garden, seedId, plotIndex, SOIL, growthNow);
   learn("plant");
-  flash = { at: { x: plotXs[plotIndex]!, y: SOIL }, until: now + FLASH_TICKS };
+  flash = {
+    at: { x: plotXs[plotIndex]!, y: SOIL },
+    until: motionNow + FLASH_TICKS,
+  };
 }
 
 /**
@@ -901,9 +950,9 @@ const announcedGrown = new WeakSet<Planting>();
 function announceGrown(): void {
   for (let i = 0; i < garden.plots.length; i++) {
     const p = garden.plots[i]?.occupant;
-    if (!p || announcedGrown.has(p) || !isGrown(p, now)) continue;
+    if (!p || announcedGrown.has(p) || !isGrown(p, growthNow)) continue;
     announcedGrown.add(p);
-    announce(grownLine(i, p, now));
+    announce(grownLine(i, p, growthNow));
   }
 }
 
@@ -977,7 +1026,7 @@ function release(e: PointerEvent): void {
     //
     // No partner, no cross, and the carrier stays put: a fumbled drag should cost nothing,
     // because the carrier is on a timer the player did not set.
-    const onto = bloomAt(garden, p, now, 1.15, localToPlot);
+    const onto = bloomAt(garden, p, growthNow, 1.15, localToPlot);
     if (!onto) return;
     const partner = garden.plots[onto.plotIndex]!.occupant!.genome;
     const pollen = parseGenome(d.bug.pollen!);
@@ -989,7 +1038,7 @@ function release(e: PointerEvent): void {
   }
 
   if (d.kind === "bloom") {
-    const onto = bloomAt(garden, p, now, 1.15, localToPlot);
+    const onto = bloomAt(garden, p, growthNow, 1.15, localToPlot);
     if (onto && onto.plotIndex !== d.plotIndex) {
       // CROSS — two different plants.
       doCross(d.genome, garden.plots[onto.plotIndex]!.occupant!.genome, p);
@@ -1095,7 +1144,7 @@ function insectAt(p: Vec2): Insect | null {
 /** How many flowers are open anywhere in the bed — a carrier needs somewhere to land. */
 function bloomCount(): number {
   return garden.plots.reduce(
-    (n, p) => n + (p.occupant ? bloomsOf(p.occupant, now).length : 0),
+    (n, p) => n + (p.occupant ? bloomsOf(p.occupant, growthNow).length : 0),
     0,
   );
 }
@@ -1115,7 +1164,7 @@ function anyOpenBloom(): { plotIndex: number; x: number; y: number } | null {
     const base = occ.plant.segments[0];
     const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
     const d = bedDepth(plotIndex);
-    return bloomsOf(occ, now).map((b) => {
+    return bloomsOf(occ, growthNow).map((b) => {
       const at = toCanvasSpace(b.center, anchor, d);
       return { plotIndex, x: at.x, y: at.y };
     });
@@ -1130,7 +1179,7 @@ function plantAt(p: Vec2): number | null {
   for (const [i, plot] of garden.plots.entries()) {
     const occ = plot.occupant;
     if (!occ) continue;
-    const age = now - occ.plantedAt;
+    const age = growthNow - occ.plantedAt;
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
@@ -1193,7 +1242,7 @@ const esc = (s: string): string =>
 function renderCard(): void {
   const plot = inspecting === null ? null : garden.plots[inspecting];
   const occ = plot?.occupant;
-  if (!occ || !isGrown(occ, now)) {
+  if (!occ || !isGrown(occ, growthNow)) {
     // An unfinished plant shows nothing. §4: traits are not disclosed before bloom, and a card
     // that reported them mid-growth would be a way to read the flower before it opened.
     cardEl.hidden = true;
@@ -1311,7 +1360,10 @@ function gardenPostcard(): string {
             // and that premise is false: blooms are created AT tip termination and take
             // OPEN_TICKS more to open, so a garden shared in full flower arrived with its
             // terminal flowers 32% open and stayed that way. The rule has one home now.
-            age: sharedAge(now - p.occupant.plantedAt, p.occupant.maxTick),
+            age: sharedAge(
+              growthNow - p.occupant.plantedAt,
+              p.occupant.maxTick,
+            ),
           }
         : null,
     ),
@@ -1563,7 +1615,7 @@ function recordGrownPlants(): void {
   for (const plot of garden.plots) {
     const p = plot.occupant;
     if (!p || p.seedId === undefined || !p.parents) continue;
-    if (!isGrown(p, now)) continue;
+    if (!isGrown(p, growthNow)) continue;
     const before = notebook;
     notebook = recordCross(notebook, {
       seedId: p.seedId,
@@ -1636,7 +1688,19 @@ function dropTarget(): number | null {
  */
 let stageCache: HTMLCanvasElement | null = null;
 
-function frame(): void {
+function frame(nowMs: number = performance.now()): void {
+  // Advance both clocks from ELAPSED TIME, at the top of the frame, so everything drawn below
+  // reflects the time that has actually passed. `requestAnimationFrame` hands us its own
+  // timestamp; the default argument covers the initial kick and any direct call from a test.
+  //
+  // The first frame has no predecessor and advances nothing, rather than measuring against a
+  // zero that would resolve the whole of a plant's growth in one step.
+  const dtMs = lastFrameMs === null ? 0 : nowMs - lastFrameMs;
+  lastFrameMs = nowMs;
+  const motionTicks = ticksElapsed(dtMs, MOTION_TICKS_PER_SECOND);
+  growthNow += ticksElapsed(dtMs, GROWTH_TICKS_PER_SECOND);
+  motionNow += motionTicks;
+
   // Composite anything newly retired before drawing, so a replaced plant appears in the
   // background on the same frame it leaves the bed rather than blinking out of existence.
   // A replaced plant RECEDES into the background rather than cutting to it.
@@ -1651,7 +1715,7 @@ function frame(): void {
         plant: gone.plant,
         key,
         place: placeRetired(key, forest.depth + receding.length, W),
-        start: now,
+        start: motionNow,
       });
       logRetirement(gone);
     }
@@ -1665,28 +1729,30 @@ function frame(): void {
 
   // Anything that has finished receding becomes pixels and stops costing a redraw.
   receding = receding.filter((r) => {
-    if (now - r.start < RECEDE_TICKS) return true;
+    if (motionNow - r.start < RECEDE_TICKS) return true;
     forest.retire(r.plant, r.key, r.place);
     return false;
   });
 
   recordGrownPlants();
   announceGrown();
-  updateInsects(now, W);
+  updateInsects(motionNow, W);
   for (const gone of takeExpired()) resolveDeparture(gone, didPollinate(rand));
-  // Ambient insects are cheap and unconditional. Carriers are rare and gated: `SPEED` ticks pass
-  // per frame, so dividing by the interval gives roughly one arrival per CARRIER_INTERVAL_TICKS
-  // ticks — about ninety seconds — and only when there is both somewhere to land and something
-  // to carry.
+  // Ambient insects are cheap and unconditional. Carriers are rare and gated against ticks
+  // ELAPSED this frame, so one arrival per CARRIER_INTERVAL_TICKS holds however fast the
+  // renderer runs — about ninety seconds either way. A fixed per-frame probability would make
+  // carriers arrive at whatever rate the machine drew at, which is the same defect the clock
+  // itself had: the gate was written as `SPEED / CARRIER_INTERVAL_TICKS` when `SPEED` was a
+  // per-frame constant. Only fires when there is both somewhere to land and something to carry.
   if (rand() < 0.003) spawnAmbient(W, H, rand);
   if (
-    rand() < SPEED / CARRIER_INTERVAL_TICKS &&
+    rand() < motionTicks / CARRIER_INTERVAL_TICKS &&
     canCarrierArrive(retirementLog, bloomCount())
   ) {
     const pollen = pickPollen(retirementLog, rand);
     const spot = anyOpenBloom();
     if (pollen && spot) {
-      spawnCarrier(pollen, spot.plotIndex, spot, now);
+      spawnCarrier(pollen, spot.plotIndex, spot, motionNow);
       // An arrival changes what the player can do, so it is a milestone rather than ambience.
       announce(carrierLabel(pollen));
     }
@@ -1694,7 +1760,8 @@ function frame(): void {
   syncA11y();
 
   // The whole picture, in one call — the same call a visit makes, so the two cannot drift.
-  // Both clocks are `now` here: the game grows and moves together. A visit pins the first.
+  // Two clocks, both running, at different rates: the bed grows slowly and moves quickly. A
+  // visit pins the first and keeps the second — same call, so the two pages cannot drift.
   stageCache = drawScene({
     ctx,
     W,
@@ -1704,8 +1771,8 @@ function frame(): void {
     forest,
     occupants: garden.plots.map((p) => p.occupant),
     receding,
-    now,
-    motionNow: now,
+    now: growthNow,
+    motionNow,
     stageCache,
   });
 
@@ -1738,10 +1805,12 @@ function frame(): void {
 
   // After the bed, so an insect reads as being in front of the flower it has settled on rather
   // than buried behind the canopy.
-  drawInsects(ctx, now);
+  drawInsects(ctx, motionNow);
 
   // Affordance: ring whatever the pointer could act on right now.
-  const hover = drag ? null : bloomAt(garden, pointer, now, 1.15, localToPlot);
+  const hover = drag
+    ? null
+    : bloomAt(garden, pointer, growthNow, 1.15, localToPlot);
   if (hover) paintHalo(hover.bloom.center, hover.bloom.radius * 1.25, 0.5);
 
   for (const [i, seed] of garden.tray.entries()) {
@@ -1777,7 +1846,7 @@ function frame(): void {
           garden.plots[plot]!.occupant ? RING_REPLACE : RING_PLANT,
         );
     } else {
-      const onto = bloomAt(garden, pointer, now, 1.15, localToPlot);
+      const onto = bloomAt(garden, pointer, growthNow, 1.15, localToPlot);
       // A pollen carrier has no source plot, and crossing it into the flower it was sitting on
       // is perfectly legal — so unlike a bloom drag, every bloom under the pointer is a valid
       // target and gets the ring.
@@ -1788,12 +1857,12 @@ function frame(): void {
     }
   }
 
-  if (flash && now < flash.until) {
+  if (flash && motionNow < flash.until) {
     // Clamped. `now < flash.until` bounds k BELOW but not above, so a clock that jumps
     // backwards gives k > 1.29 and an arc radius of -44 — which throws, and a throw inside
     // the rAF callback stops the loop being rescheduled, freezing the entire game with no
     // visible cause. One unclamped interpolation took the whole render loop down.
-    const k = Math.min(1, Math.max(0, (flash.until - now) / FLASH_TICKS));
+    const k = Math.min(1, Math.max(0, (flash.until - motionNow) / FLASH_TICKS));
     paintHalo(flash.at, 10 + 34 * (1 - k), 0.55 * k);
   }
 
@@ -1809,7 +1878,6 @@ function frame(): void {
     codeEl.textContent = share ? `${share} — copy link` : "";
   }
 
-  now += SPEED;
   requestAnimationFrame(frame);
 }
 
@@ -1964,7 +2032,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   /** The packed garden code, for a driver to compare against what the share button copies. */
   __gardenCode: () => gardenPostcard(),
   __seek: (t: number) => {
-    now = t;
+    growthNow = t;
   },
   __state: () => ({
     tray: garden.tray.length,
@@ -1994,7 +2062,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
       const base = occ.plant.segments[0];
       const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
       const d = bedDepth(plotIndex);
-      return bloomsOf(occ, now).map((b) => {
+      return bloomsOf(occ, growthNow).map((b) => {
         const at = toCanvasSpace(b.center, anchor, d);
         return { plotIndex, x: at.x, y: at.y };
       });
@@ -2028,7 +2096,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __spawnCarrier: (pollen: string) => {
     const spot = anyOpenBloom();
     if (!spot) return false;
-    spawnCarrier(pollen, spot.plotIndex, spot, now);
+    spawnCarrier(pollen, spot.plotIndex, spot, motionNow);
     announce(carrierLabel(pollen));
     return true;
   },
@@ -2051,7 +2119,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __soil: SOIL,
   __size: () => ({ w: W, h: H }),
   /** The garden clock, so a driver can reason about anything measured in ticks. */
-  __now: () => now,
+  __now: () => growthNow,
   /**
    * Plants mid-flight, on its own so a driver can POLL it.
    *
@@ -2089,7 +2157,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __plantInto: (plot: number) => {
     const seed = garden.tray[0];
     if (!seed) return false;
-    garden = plantSeed(garden, seed.id, plot, SOIL, now);
+    garden = plantSeed(garden, seed.id, plot, SOIL, growthNow);
     return true;
   },
   /**
@@ -2103,7 +2171,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
       .map((p, i) => {
         const occ = p.occupant;
         if (!occ) return null;
-        const age = now - occ.plantedAt;
+        const age = growthNow - occ.plantedAt;
         let minX = Infinity;
         let maxX = -Infinity;
         let minY = Infinity;

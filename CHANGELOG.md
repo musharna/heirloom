@@ -5,6 +5,59 @@ branch, so the units here are **milestones**, newest first, dated by the commits
 them. Where a milestone retracted or reverted something, that is recorded too — a changelog that
 only lists what worked is a marketing document.
 
+## Smooth growth — 2026-08-04
+
+- A planting used to drop the bed to ~6.5fps for about eight seconds, and the still-image cache
+  could not help, because the thing it caches is a plant that has stopped moving. So the cache
+  now works per **pass** instead of per plant. `paintPlant` draws five global passes in a fixed
+  order — stems, leaves, halos, petals, centres — and those boundaries are load-bearing bug
+  fixes, not style: interleaving halos with petals erases ink contours. One layer per pass
+  preserves the order exactly, because source-over compositing is associative.
+- Only what has **stopped changing** is baked, and "stopped" is not "visible". A chain is
+  finished when its last segment in the whole plant has appeared, not when the visible part stops
+  growing — otherwise a chain that pauses gets baked as a stale prefix and then grows again. A
+  bloom is finished only once fully open; baking it when it first appears would freeze it at 0.32
+  of its size permanently. All three rules were wrong in the first draft of the plan and were
+  caught by reading the growth code rather than by review.
+- Anything still moving is drawn straight onto the target between the layer blits, at its place
+  in the pass order. No transient layer, one fewer clear and blit, and live geometry reaches the
+  canvas without a resampling step.
+- Opening flowers blit from a per-bloom bitmap rather than re-tracing 96-sample petal paths every
+  frame. That is sound because opening is fixed geometry under a scale about the flower's own
+  centre: baking at full openness bakes the squash in, so the blit is a **uniform** scale.
+- Measured against a production build, seeded, free-running over a whole planting, with the same
+  driver run against the old path as the control: **p90 10.4 → 41.8–50.0 fps**, **5.34s → 0.1–0.6s
+  below 30fps**, 4.8–10.1MB of layers held at the peak and exactly 0 once the plants settle. Fill
+  calls over a real 101-frame sweep fell **28x**. Settled plants are untouched.
+- Fidelity is measured against the **shipped** still cache, re-measured every run rather than
+  frozen as a constant, because both painters blit integer-sized bitmaps to fractional world
+  coordinates and so both resample: the shipped cache differs from a direct paint by 104/255, and
+  this painter by 105/255.
+- **Retracted during the work:** a 56/255 "opening ceiling" carried over from the visual review
+  that approved the bitmap trade. It was measured on flowers magnified 9x with nearest-neighbour
+  sampling, which the code never does — a 1:1 blit with no scaling at all already differs by
+  137/255. Second time on this branch that a bar was measured on an operation the code does not
+  perform. The relaxation is now bounded against an unscaled blit of the same bitmap, plus a
+  geometric silhouette check, because an error budget whose reference goes through the same blit
+  inherits the same defect and passes.
+- **A memory leak found by writing the check the plan said was missing:** the growth layers were
+  released only on the frame a plant's still image was built, so a plant re-entering growth held
+  them forever.
+- Two new gates. `tools/check-growth.mjs` compares the painters pixel-for-pixel at settled and
+  growing ticks, one-shot and swept frame-by-frame, then sweeps all 284 frames of growth
+  continuously — five sampled ticks are 15–20 apart while a flower opens over 26, so a defect can
+  live entirely between two of them. `tools/check-growth-motion.mjs` compares how far the picture
+  **moves** between frames, which is the only way to see a pop: every other check is a still, and
+  a still taken either side of a discontinuity looks perfect.
+- Both were seen failing before being trusted. A doubled squash scores 188/255 against a 160
+  ceiling; a defect confined to ticks 42–54 passes all ten sampled checks and fails only the
+  continuous sweep; a pop scores 1.737x motion against a 1.150x baseline. One mutant survives the
+  pixel gate entirely — duplicating an opaque flower's draw changes no pixels — and is caught by
+  the unit suite instead, as a leaked bitmap.
+- `vitest` had never been given a timeout, and the golden op-log test failed CI at 5.48s against
+  the 5000ms default — a timeout, not a mismatch. The render tests legitimately cost seconds and
+  that cost is the coverage, so the timeout is now chosen (20s) rather than inherited.
+
 ## The clock measures time — 2026-08-04
 
 - Growth, sway, gusts, insects and the recede animation were all driven by a counter that

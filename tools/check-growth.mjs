@@ -40,8 +40,18 @@ const MOTION_OUT = process.env.GROWTH_MOTION_OUT;
  * This is the same failure as the retracted OPENING_CEILING one layer out: **the review medium
  * was not showing what it claimed to show.** There the bar was measured on a 9x magnified render
  * the code never performs; here the frames were captured below what the code actually draws.
+ *
+ * 2 is the game's own ceiling and so the right default. A reviewer whose display sits below it
+ * (1.5 is common on Windows at 150% scaling) gets a supersampled picture — correct size, more
+ * source pixels than the screen can show — which is sharp but not exactly 1:1. Set
+ * `GROWTH_MOTION_DPR` to your own `devicePixelRatio` for a true pixel-for-pixel match with what
+ * the game draws on YOUR screen; the player prints the value to use.
  */
-const CAPTURE_DPR = 2;
+const CAPTURE_DPR = Number(process.env.GROWTH_MOTION_DPR ?? 2);
+if (!Number.isFinite(CAPTURE_DPR) || CAPTURE_DPR <= 0) {
+  console.error(`FAIL  GROWTH_MOTION_DPR must be a positive number, got "${process.env.GROWTH_MOTION_DPR}"`);
+  process.exit(1);
+}
 
 /**
  * The bar is RELATIVE, and measured every run.
@@ -442,18 +452,24 @@ whatever tick you are on, both images are that tick.</p>
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
-  // Frames are ${CAPTURE_DPR}x; laid out at 1x world size. On a display whose devicePixelRatio
-  // equals the capture dpr, that is exactly one image pixel per device pixel.
+  // Frames are ${CAPTURE_DPR}x, laid out at 1x WORLD size. The physical size on screen is
+  // therefore always correct — 1800 CSS px of image for 1800 world units, exactly as the game
+  // sizes its canvas. Only the RESOLUTION varies with the viewer's display.
+  //
+  // An earlier version of this readout said a downscale meant the plants were "smaller than a
+  // player sees". That was wrong and worth recording as wrong: it confused resolution with size.
+  // Downsampling changes how many source pixels feed each device pixel and does not move a single
+  // edge. Reported by a reviewer at devicePixelRatio 1.5, where the message was actively
+  // misleading about the one thing the readout exists to clarify.
   function reportScale() {
     const cap = ${CAPTURE_DPR};
     const dpr = window.devicePixelRatio || 1;
-    const shown = (dpr / cap).toFixed(2);
     const verdict =
       Math.abs(dpr - cap) < 0.01
         ? "1:1 — one image pixel per device pixel, exactly what the game draws"
         : dpr > cap
-          ? "UPSCALED " + shown + "x — your display is finer than the capture, so this is SOFTER than the game"
-          : "downscaled to " + shown + "x — sharp, but smaller than a player sees";
+          ? "UPSCALED " + (dpr / cap).toFixed(2) + "x — your display is finer than the capture, so this is SOFTER than the game. Recapture with GROWTH_MOTION_DPR=" + dpr
+          : "supersampled " + (cap / dpr).toFixed(2) + "x — correct size, more detail than your display can show, resampled down. For an exact 1:1, recapture with GROWTH_MOTION_DPR=" + dpr;
     document.getElementById("scale").textContent =
       "frames captured at " + cap + "x · your devicePixelRatio " + dpr + " · " + verdict;
   }

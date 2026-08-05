@@ -310,17 +310,22 @@
   const FRAME_H = 700;
 
   /**
-   * One frame of the whole bed, as a PNG data URL.
+   * Compose the whole bed into a context, at `dpr` device pixels per world pixel.
    *
-   * Deliberately NOT released between calls, so a driver walking the ticks upward drives the
-   * INCREMENTAL painter — the same accumulation the game does. Call `__releaseAll` to start a
-   * sequence over.
+   * ⚠️ THE BACKING STORE MUST SCALE WITH `dpr`, and an earlier version of this got it wrong in a
+   * way worth recording: it passed `dpr` down to `paintPlantGrowing` — which uses it only for the
+   * resolution of its internal LAYERS — while leaving the output canvas a fixed FRAME_W x FRAME_H.
+   * So every captured frame was 1x no matter what was asked for.
+   *
+   * That matters because `garden/garden.ts:111` renders the real game at
+   * `Math.min(2, devicePixelRatio)`. A 1x capture is HALF the resolution the game produces on a
+   * retina display, and a reviewer looking at it is judging a worse picture than the game draws —
+   * the same class of mistake as the 9x-magnified review that produced the retracted
+   * OPENING_CEILING. Match the game, or the review is of something else.
    */
-  window.__frame = (tick, how, dpr = 1) => {
-    const c = document.createElement("canvas");
-    c.width = FRAME_W;
-    c.height = FRAME_H;
-    const g = c.getContext("2d");
+  function composeBed(g, tick, how, dpr) {
+    g.save();
+    g.scale(dpr, dpr);
     g.fillStyle = "#2b3026";
     g.fillRect(0, 0, FRAME_W, FRAME_H);
     const slot = FRAME_W / plants.length;
@@ -331,8 +336,33 @@
       else paintPlant(g, plant, tick);
       g.restore();
     });
-    return c.toDataURL("image/png");
-  };
+    g.restore();
+  }
+
+  function bedCanvas(tick, how, dpr, readback) {
+    const c = document.createElement("canvas");
+    c.width = Math.round(FRAME_W * dpr);
+    c.height = Math.round(FRAME_H * dpr);
+    const g = c.getContext(
+      "2d",
+      readback ? { willReadFrequently: true } : undefined,
+    );
+    composeBed(g, tick, how, dpr);
+    return { canvas: c, ctx: g };
+  }
+
+  /**
+   * One frame of the whole bed, as a PNG data URL.
+   *
+   * Deliberately NOT released between calls, so a driver walking the ticks upward drives the
+   * INCREMENTAL painter — the same accumulation the game does. Call `__releaseAll` to start a
+   * sequence over.
+   */
+  window.__frame = (tick, how, dpr = 1) =>
+    bedCanvas(tick, how, dpr, false).canvas.toDataURL("image/png");
+
+  /** The world-space size of a captured frame, so a viewer can lay it out at true 1:1. */
+  window.__frameSize = () => ({ w: FRAME_W, h: FRAME_H });
 
   window.__releaseAll = () => {
     for (const plant of plants) releaseGrowth(plant);
@@ -340,21 +370,8 @@
 
   /** The bed at one tick, as raw pixels — the same composition `__frame` encodes to a PNG. */
   function bedPixels(tick, how, dpr) {
-    const c = document.createElement("canvas");
-    c.width = FRAME_W;
-    c.height = FRAME_H;
-    const g = c.getContext("2d", { willReadFrequently: true });
-    g.fillStyle = "#2b3026";
-    g.fillRect(0, 0, FRAME_W, FRAME_H);
-    const slot = FRAME_W / plants.length;
-    plants.forEach((plant, i) => {
-      g.save();
-      g.translate((i + 0.5) * slot - W / 2, 0);
-      if (how === "layered") paintPlantGrowing(g, plant, tick, dpr);
-      else paintPlant(g, plant, tick);
-      g.restore();
-    });
-    return g.getImageData(0, 0, FRAME_W, FRAME_H).data;
+    const { canvas: c, ctx: g } = bedCanvas(tick, how, dpr, true);
+    return g.getImageData(0, 0, c.width, c.height).data;
   }
 
   /** Mean absolute channel change between two frames — how much the picture MOVED. */

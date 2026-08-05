@@ -30,6 +30,20 @@ const URL = process.env.PROBE_URL ?? "http://localhost:5173/tools/growth-probe.h
 const MOTION_OUT = process.env.GROWTH_MOTION_OUT;
 
 /**
+ * Capture the review frames at the resolution the GAME renders at, not at 1.
+ *
+ * `garden/garden.ts:111` sizes the real canvas at `Math.min(2, devicePixelRatio)`. The first
+ * version of this capture wrote 1x frames and a viewer then stretched them to fill the same
+ * physical space — so the reviewer was judging a picture at half the game's resolution, upscaled.
+ * Reported as "why do they look blurry", and they were right.
+ *
+ * This is the same failure as the retracted OPENING_CEILING one layer out: **the review medium
+ * was not showing what it claimed to show.** There the bar was measured on a 9x magnified render
+ * the code never performs; here the frames were captured below what the code actually draws.
+ */
+const CAPTURE_DPR = 2;
+
+/**
  * The bar is RELATIVE, and measured every run.
  *
  * An absolute number was tried and was wrong: 3/255 came from a synthetic probe that composited
@@ -310,8 +324,8 @@ check(
 // between states — and that is a human judgement on a moving picture, not a threshold.
 //
 // The visual review that approved the opening relaxation (spec §2) compared THREE STILL FLOWERS,
-// magnified. Nothing has yet looked at four plants growing at once at 1x, which is what a player
-// sees and the only place a timing or popping artefact can show up at all.
+// magnified. Nothing has yet looked at four plants growing at once at the size a player sees them,
+// which is the only place a timing or popping artefact can show up at all.
 if (MOTION_OUT) {
   // Every 2 ticks. A flower opens over OPEN_TICKS = 26, so this is ~13 frames per opening —
   // enough to see the animation rather than infer it from its endpoints.
@@ -331,8 +345,8 @@ if (MOTION_OUT) {
       // painter accumulating exactly as it does in the game. Capturing each tick from a fresh
       // painter would produce a sequence the game never renders.
       const url = await page.evaluate(
-        ({ tick, how }) => window.__frame(tick, how),
-        { tick: t, how },
+        ({ tick, how, dpr }) => window.__frame(tick, how, dpr),
+        { tick: t, how, dpr: CAPTURE_DPR },
       );
       writeFileSync(
         join(MOTION_OUT, `${how}-t${pad}.png`),
@@ -360,11 +374,17 @@ function player(ticks) {
   return `<meta charset="utf8"><title>growth in motion — direct vs layered</title>
 <style>
   body { background:#1b1f18; color:#cfd6c6; font:14px/1.5 system-ui, sans-serif; margin:0; padding:16px; }
-  /* Natural size, and the page scrolls sideways rather than scaling to fit. A 1x review that
-     quietly downscales to the window is not a 1x review — resampling the comparison is the one
-     thing that would hide the difference being looked for. */
+  /* The frames are captured at 2x — the resolution the game itself renders at — and laid out at
+     1x WORLD size, so on a 2x display each image pixel is one device pixel and the plants are the
+     physical size a player sees. The page scrolls sideways rather than scaling to fit: a review
+     that quietly resamples the comparison is the one thing that would hide the difference being
+     looked for.
+
+     No image-rendering:pixelated here. That forces nearest-neighbour, which is right only for
+     deliberate integer magnification — the exact trap that produced the retracted 56/255 ceiling.
+     Default smoothing is what the browser does to the game's own canvas. */
   #stage { position:relative; width:1800px; height:700px; }
-  #stage img { position:absolute; inset:0; width:1800px; height:700px; image-rendering:pixelated; }
+  #stage img { position:absolute; inset:0; width:1800px; height:700px; }
   #stage img.hidden { visibility:hidden; }
   .bar { display:flex; gap:12px; align-items:center; margin:10px 0; flex-wrap:wrap; }
   kbd { background:#333a2e; border-radius:3px; padding:1px 5px; }
@@ -377,6 +397,10 @@ function player(ticks) {
   <span>showing <b id="which">layered</b></span>
   <span>press <kbd>space</kbd> to cut between painters, <kbd>←</kbd> <kbd>→</kbd> to step</span>
 </div>
+<!-- Says what it is ACTUALLY doing. Without this the viewer cannot tell a soft render from a
+     frame being stretched by their display, which is exactly the confusion these frames caused
+     the first time round. -->
+<div class="bar"><span id="scale"></span></div>
 <div id="stage">
   <img id="direct" class="hidden">
   <img id="layered">
@@ -418,6 +442,23 @@ whatever tick you are on, both images are that tick.</p>
     requestAnimationFrame(loop);
   }
   requestAnimationFrame(loop);
+  // Frames are ${CAPTURE_DPR}x; laid out at 1x world size. On a display whose devicePixelRatio
+  // equals the capture dpr, that is exactly one image pixel per device pixel.
+  function reportScale() {
+    const cap = ${CAPTURE_DPR};
+    const dpr = window.devicePixelRatio || 1;
+    const shown = (dpr / cap).toFixed(2);
+    const verdict =
+      Math.abs(dpr - cap) < 0.01
+        ? "1:1 — one image pixel per device pixel, exactly what the game draws"
+        : dpr > cap
+          ? "UPSCALED " + shown + "x — your display is finer than the capture, so this is SOFTER than the game"
+          : "downscaled to " + shown + "x — sharp, but smaller than a player sees";
+    document.getElementById("scale").textContent =
+      "frames captured at " + cap + "x · your devicePixelRatio " + dpr + " · " + verdict;
+  }
+  reportScale();
+  addEventListener("resize", reportScale);
   playBtn.onclick = () => { playing = !playing; playBtn.textContent = playing ? "pause" : "play"; };
   scrub.oninput = () => { playing = false; playBtn.textContent = "play"; i = +scrub.value; render(); };
   addEventListener("keydown", (e) => {

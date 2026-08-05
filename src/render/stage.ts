@@ -1,4 +1,4 @@
-import type { Bloom, Plant, StrokeSegment } from "../types";
+import type { Bloom, LeafSpec, Plant, StrokeSegment } from "../types";
 import {
   LIGHT,
   buildOutline,
@@ -360,29 +360,58 @@ export function paintContactShadow(
   ctx.restore();
 }
 
-export function paintPlant(
-  ctx: CanvasRenderingContext2D,
-  plant: Plant,
-  untilTick = Infinity,
-): void {
-  /**
-   * How far open a flower is, from how long ago its shoot terminated.
-   *
-   * Flowers used to switch on at full size the instant their tick arrived, which read as a
-   * plant acquiring decorations rather than coming into flower. `Infinity` — the default, and
-   * what the background buffer composites with — gives 1, so a retired plant is never frozen
-   * half-open.
-   */
-  const opening = (tick: number): number => {
-    const age = untilTick - tick;
-    return age >= OPEN_TICKS
-      ? 1
-      : 0.32 + 0.68 * ease(Math.max(0, age) / OPEN_TICKS);
-  };
+/**
+ * How far open a flower is, from how long ago its shoot terminated.
+ *
+ * Flowers used to switch on at full size the instant their tick arrived, which read as a
+ * plant acquiring decorations rather than coming into flower. `Infinity` — the default, and
+ * what the background buffer composites with — gives 1, so a retired plant is never frozen
+ * half-open.
+ *
+ * Exported so the layered painter in `growing.ts` computes it identically. A second copy of
+ * this curve would let the two painters disagree about what "half open" means.
+ */
+export function openingAt(untilTick: number, tick: number): number {
+  const age = untilTick - tick;
+  return age >= OPEN_TICKS
+    ? 1
+    : 0.32 + 0.68 * ease(Math.max(0, age) / OPEN_TICKS);
+}
+
+/** Visible stem chains, deepest first — the order the stem pass depends on. */
+export function chainsFor(plant: Plant, untilTick: number): StrokeSegment[][] {
   // Stems first, deepest chains behind. Each carries an ink contour: the art direction
   // applies to stems as well as petals, and previously only petals were outlined.
   const chains = groupChains(visibleSegments(plant, untilTick));
   chains.sort((a, b) => (b[0]?.depth ?? 0) - (a[0]?.depth ?? 0));
+  return chains;
+}
+
+/**
+ * Visible blooms after occlusion culling — the set every bloom pass iterates.
+ *
+ * Culling is greedy over array order and `plant.blooms` is emitted in tick order, so this set
+ * only ever GROWS as `untilTick` advances. `src/render/growing.ts` depends on that; the
+ * invariant is asserted in test/growing.test.ts.
+ */
+export function bloomsFor(plant: Plant, untilTick: number): Bloom[] {
+  // Occluded blooms are DROPPED, not drawn. A bloom whose centre sits inside a kept
+  // bloom's disc contributes no readable flower — but it did contribute a centre dot, and
+  // those fused into chains: one panel collapsed ~85 centres into 29 blobs, the largest a
+  // 20-deep "string of beads" draped across the canopy. Culling also opens the canopy so
+  // branch geometry behind it becomes visible.
+  // Also gated by tick, so flowers appear as their shoots finish rather than all at once.
+  // Culling uses each bloom's FULL radius, not its opening one, so the set of flowers on
+  // screen is decided once and does not flicker as they open.
+  return cullOccludedBlooms(plant.blooms.filter((b) => b.tick <= untilTick));
+}
+
+/** PASS 1 — stems. Callers pass the chains so the selector can be shared. */
+export function paintStemPass(
+  ctx: CanvasRenderingContext2D,
+  plant: Plant,
+  chains: StrokeSegment[][],
+): void {
   for (const chain of chains) {
     const dense = smoothChain(chain, 3);
     const outline = buildOutline(dense);
@@ -430,12 +459,18 @@ export function paintPlant(
       ctx.stroke();
     }
   }
+}
 
+/** PASS 2 — leaves. Above the stems they attach to, below the blooms. */
+export function paintLeafPass(
+  ctx: CanvasRenderingContext2D,
+  plant: Plant,
+  leaves: LeafSpec[],
+): void {
   // Leaves sit above the stems they attach to but below the blooms. Gated by tick like the
   // stems: previously only segments were filtered, so a half-grown plant drew its full
   // complement of leaves and flowers on frame one and only the stems animated.
-  for (const lf of plant.leaves) {
-    if (lf.tick > untilTick) continue;
+  for (const lf of leaves) {
     const pts = leafPath(lf);
     if (pts.length < 3) continue;
     ctx.beginPath();
@@ -484,27 +519,14 @@ export function paintPlant(
       ctx.stroke();
     }
   }
+}
 
-  // Blooms in TWO passes: every halo first, then every petal.
-  //
-  // Interleaving them (halo, petals, halo, petals...) meant a later bloom's halo was
-  // composited OVER an earlier bloom's petals, erasing its ink contour and turning
-  // overlapping blooms into washed-out mush where you could not tell which was in front.
-  ctx.save();
-  ctx.shadowBlur = 0;
-
-  // Occluded blooms are DROPPED, not drawn. A bloom whose centre sits inside a kept
-  // bloom's disc contributes no readable flower — but it did contribute a centre dot, and
-  // those fused into chains: one panel collapsed ~85 centres into 29 blobs, the largest a
-  // 20-deep "string of beads" draped across the canopy. Culling also opens the canopy so
-  // branch geometry behind it becomes visible.
-  // Also gated by tick, so flowers appear as their shoots finish rather than all at once.
-  // Culling uses each bloom's FULL radius, not its opening one, so the set of flowers on
-  // screen is decided once and does not flicker as they open.
-  const blooms = cullOccludedBlooms(
-    plant.blooms.filter((b) => b.tick <= untilTick),
-  );
-
+/** PASS 3 — every halo, before any petal. */
+export function paintHaloPass(
+  ctx: CanvasRenderingContext2D,
+  blooms: Bloom[],
+  opening: (tick: number) => number,
+): void {
   // Glow radius and alpha cut hard. At 1.7x radius the halo measured an 18-27px ramp whose
   // pixel area equalled up to 100% of the drawn plant, roughly 20:1 against the 1px rim —
   // so the eye read bloom-haze instead of linework, and every contour fix drowned in it.
@@ -525,12 +547,15 @@ export function paintPlant(
     ctx.arc(b.center.x, b.center.y, r, 0, Math.PI * 2);
     ctx.fill();
   }
+}
 
-  // Per-bloom transform, shared by the petal and centre passes.
-  const withBloomTransform = (
-    b: (typeof plant.blooms)[number],
-    draw: () => void,
-  ): void => {
+/** Per-bloom transform, shared by the petal and centre passes. */
+function withBloomTransform(
+  ctx: CanvasRenderingContext2D,
+  b: Bloom,
+  opening: (tick: number) => number,
+  draw: () => void,
+): void {
     ctx.save();
     // Nodding foreshortening: a bloom on a downward-pointing shoot is seen obliquely, so
     // squash it across the shoot axis. Without this every bloom faced the viewer dead-on
@@ -542,8 +567,14 @@ export function paintPlant(
     ctx.translate(-b.center.x, -b.center.y);
     draw();
     ctx.restore();
-  };
+}
 
+/** PASS 4 — petals for every bloom, after every halo. */
+export function paintPetalPass(
+  ctx: CanvasRenderingContext2D,
+  blooms: Bloom[],
+  opening: (tick: number) => number,
+): void {
   // PASS 2 — petals for every bloom.
   //
   // NOTE: sepals are deliberately NOT drawn. A calyx was added here to fill the gaps
@@ -552,7 +583,7 @@ export function paintPlant(
   // petal-on-petal overlap should be, which ENTRENCHED the pinwheel read it was meant to
   // cure. Bloom.sepals is still generated for a future profile/bud view.
   for (const b of blooms) {
-    withBloomTransform(b, () => {
+    withBloomTransform(ctx, b, opening, () => {
       // A receptacle disc behind the petals, so the middle of a bloom is never a hole in
       // the ground. Doubled blooms previously darkened to a near-black spiral void.
       ctx.fillStyle = petalColor(b.hueClass, b.white, 0.55);
@@ -584,14 +615,21 @@ export function paintPlant(
       }
     });
   }
+}
 
+/** PASS 5 — centres, after every petal in the plant. */
+export function paintCentrePass(
+  ctx: CanvasRenderingContext2D,
+  blooms: Bloom[],
+  opening: (tick: number) => number,
+): void {
   // PASS 3 — centres, AFTER every petal in the plant.
   //
   // Drawing each bloom's centre immediately after its own petals meant the NEXT bloom's
   // petals buried it: measured 4 visible centres against ~13 bloom-sized units, so two
   // thirds of the flowers read as centreless petal piles.
   for (const b of blooms) {
-    withBloomTransform(b, () => {
+    withBloomTransform(ctx, b, opening, () => {
       if (b.stamens) {
         ctx.fillStyle = PALETTE.stamen;
         ctx.beginPath();
@@ -622,5 +660,34 @@ export function paintPlant(
       ctx.stroke();
     });
   }
+}
+
+/**
+ * Draw a plant, as five passes in a fixed order.
+ *
+ * The pass boundaries are load-bearing and each is a recorded bug fix: interleaving halos with
+ * petals composited a later bloom's halo OVER an earlier bloom's petals and erased its ink
+ * contour, and drawing each centre after its own petals let the next bloom bury it. The order
+ * here is the whole contract, and `test/passes.test.ts` holds it against a golden.
+ */
+export function paintPlant(
+  ctx: CanvasRenderingContext2D,
+  plant: Plant,
+  untilTick = Infinity,
+): void {
+  const opening = (tick: number): number => openingAt(untilTick, tick);
+  paintStemPass(ctx, plant, chainsFor(plant, untilTick));
+  paintLeafPass(
+    ctx,
+    plant,
+    plant.leaves.filter((lf) => lf.tick <= untilTick),
+  );
+  const blooms = bloomsFor(plant, untilTick);
+  // The save/shadowBlur wrapper stays around all three bloom passes, exactly as before.
+  ctx.save();
+  ctx.shadowBlur = 0;
+  paintHaloPass(ctx, blooms, opening);
+  paintPetalPass(ctx, blooms, opening);
+  paintCentrePass(ctx, blooms, opening);
   ctx.restore();
 }

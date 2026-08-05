@@ -104,6 +104,34 @@ jobs:
       # throttle and says SKIP out loud if none exists, rather than passing quietly.
       - run: node tools/check-clock.mjs
 
+      # The render-fidelity gate for the growth painter. It needs `tools/growth-probe.html`,
+      # which imports `/src` modules directly and is NOT one of the four inputs `vite.config.ts`
+      # builds — so it does not exist in the production bundle above and cannot be served by
+      # `vite preview`. The DEV server is started here just for it. That is a real difference
+      # from every other step in this file, and it is acceptable for this one check because what
+      # it compares is two painters inside one page: bundling is not part of the question.
+      #
+      # It runs here, unlike `check-growth-fps.mjs`, because what it asserts is PORTABLE. Every
+      # bar in it is re-measured in the same run off the shipped `paintPlantCached`, so a runner
+      # whose antialiasing differs moves both arms together. `check-growth-fps.mjs` asserts
+      # frame-rate floors and stays local with `check-phone.mjs`, for the reason above.
+      # `check-growth-motion.mjs` shares this step because it needs the same dev server, and
+      # because it answers the question the fidelity gate structurally cannot: every comparison
+      # in check-growth is a STILL, so a pop between two frames is invisible to all 284 of them.
+      # It asserts a RATIO between two arms measured in the same run, so nothing in it is a
+      # frame-rate number that would fail to travel to a slower runner.
+      - name: the growth-render fidelity gate
+        env:
+          PROBE_URL: http://127.0.0.1:5199/tools/growth-probe.html
+        run: |
+          npx vite --port 5199 --strictPort --host 127.0.0.1 &
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null "$PROBE_URL"; then echo "dev server up after ${i}s"; break; fi
+            sleep 1
+          done
+          node tools/check-growth.mjs
+          node tools/check-growth-motion.mjs
+
       # A driver failure is a VISUAL failure most of the time, and "FAIL — coverage 0" does not
       # say what the screen looked like. The drivers already write PNGs; keep them.
       - if: failure()

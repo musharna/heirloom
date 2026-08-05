@@ -1,0 +1,498 @@
+<meta charset="utf8" />
+<title>growth render probe</title>
+<!--
+  Renders the same plant through both painters so `tools/check-growth.mjs` can diff them.
+
+  Dev-only: `vite.config.ts` builds exactly four inputs (index, garden, lookdev, visit), so this
+  page is served by the dev server and never enters the production bundle.
+-->
+<script type="module">
+  import { paintPlant, paintPetalPass } from "/src/render/stage.ts";
+  import {
+    blitOpeningPetals,
+    paintPlantGrowing,
+    releaseGrowth,
+  } from "/src/render/growing.ts";
+  import { paintPlantCached } from "/src/render/cache.ts";
+  import { growPlant } from "/src/growth/sim.ts";
+  import { randomGenome } from "/src/genome/genome.ts";
+  import { express } from "/src/genome/express.ts";
+  import { mulberry32 } from "/src/rng.ts";
+
+  const W = 900;
+  const H = 700;
+
+  const rand = mulberry32(20260804);
+  const plants = Array.from({ length: 4 }, () =>
+    growPlant(express(randomGenome(rand)), (rand() * 1e9) | 0, {
+      x: W / 2,
+      y: H - 40,
+    }),
+  );
+
+  const mk = () => {
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    return c;
+  };
+
+  function draw(how, plant, tick, dx = 0, dpr = 1) {
+    const c = mk();
+    const g = c.getContext("2d");
+    // A neutral ground, so alpha differences show up as colour differences the way they do in
+    // the game rather than being invisible against transparency.
+    g.fillStyle = "#2b3026";
+    g.fillRect(0, 0, W, H);
+    g.translate(dx, 0);
+    if (how === "layered") paintPlantGrowing(g, plant, tick, dpr);
+    // The SHIPPED still-image cache. Its error against a direct paint is the bar the design
+    // asks for — "no worse than what paintPlantCached already does" — and it has to be
+    // measured with this same instrument rather than inferred from a synthetic probe.
+    else if (how === "cached") paintPlantCached(g, plant, tick, -Infinity, dpr);
+    else paintPlant(g, plant, tick);
+    return g.getImageData(0, 0, W, H).data;
+  }
+
+  /**
+   * Paint a plant the way the GAME does: one frame after another, letting the layers
+   * accumulate, and only then read the result.
+   *
+   * `draw("layered", …)` builds every layer inside a SINGLE call, because the caller releases
+   * the plant between comparisons. That measures compositing, but it cannot measure
+   * incrementality — a bake that lands in the wrong order relative to an earlier frame's, or a
+   * piece of growth drawn into a layer twice, needs more than one frame to exist at all. This
+   * drives the whole sweep and throws the intermediate frames away.
+   */
+  function drawSwept(plant, tick, dpr = 1, step = 4) {
+    const c = mk();
+    const g = c.getContext("2d");
+    g.fillStyle = "#2b3026";
+    g.fillRect(0, 0, W, H);
+    releaseGrowth(plant);
+    const scratch = mk().getContext("2d");
+    // Nothing changes after growth ends, so a settled tick sweeps the growth window then jumps.
+    const last = Math.min(tick, 240);
+    for (let t = 0; t < last; t += step)
+      paintPlantGrowing(scratch, plant, t, dpr);
+    paintPlantGrowing(g, plant, tick, dpr);
+    return g.getImageData(0, 0, W, H).data;
+  }
+
+  /**
+   * @param mode direct-vs-direct   — must be exactly zero, or the harness cannot report zero
+   *             direct-vs-shifted  — must be non-zero, or the harness cannot report a difference
+   *             direct-vs-layered  — one-shot: does the compositing hold?
+   *             direct-vs-swept    — frame after frame: does the INCREMENTAL bake hold?
+   */
+  window.__compare = (tick, mode, dpr = 1) => {
+    let max = 0;
+    let differing = 0;
+    let total = 0;
+    let sum = 0;
+    for (const plant of plants) {
+      const a = draw("direct", plant, tick);
+      const b =
+        mode === "direct-vs-direct"
+          ? draw("direct", plant, tick)
+          : mode === "direct-vs-shifted"
+            ? draw("direct", plant, tick, 1)
+            : mode === "direct-vs-cached"
+              ? draw("cached", plant, tick, 0, dpr)
+              : mode === "direct-vs-swept"
+                ? drawSwept(plant, tick, dpr)
+                : draw("layered", plant, tick, 0, dpr);
+      for (let i = 0; i < a.length; i++) {
+        const d = Math.abs(a[i] - b[i]);
+        if (d) {
+          differing++;
+          sum += d;
+          if (d > max) max = d;
+        }
+        total++;
+      }
+      releaseGrowth(plant);
+    }
+    return {
+      max,
+      differing,
+      pct: (100 * differing) / total,
+      mean: sum / total,
+    };
+  };
+
+  /**
+   * The opening relaxation, ON ITS OWN.
+   *
+   * One flower, at one opening, painted two ways: the vector path the direct painter uses, and
+   * the bitmap blit `growing.ts` uses while it opens. Nothing else is on the canvas, so the
+   * difference is the relaxation and only the relaxation — which is what the design bounded and
+   * what a whole-frame diff cannot see, because the resampling of the baked layers is an order
+   * of magnitude larger and swamps it.
+   *
+   * This is the visual review that approved the trade (spec §2), turned into a number.
+   */
+  window.__openingError = (o, dpr = 1) => {
+    let max = 0;
+    let sum = 0;
+    let total = 0;
+    let flowers = 0;
+    let inkVector = 0;
+    let inkBitmap = 0;
+    /** Worst disagreement, in pixels, between the two arms' ink bounding boxes. */
+    let boxOff = 0;
+    let sumVecW = 0,
+      sumVecH = 0,
+      sumBmpW = 0,
+      sumBmpH = 0;
+    for (const plant of plants) {
+      for (const b of plant.blooms) {
+        const vec = mk();
+        const gv = vec.getContext("2d");
+        gv.fillStyle = "#2b3026";
+        gv.fillRect(0, 0, W, H);
+        gv.save();
+        gv.shadowBlur = 0;
+        paintPetalPass(gv, [b], () => o);
+        gv.restore();
+
+        const bit = mk();
+        const gb = bit.getContext("2d");
+        gb.fillStyle = "#2b3026";
+        gb.fillRect(0, 0, W, H);
+        gb.save();
+        gb.shadowBlur = 0;
+        // The SHIPPED blit, not a copy of it.
+        if (!blitOpeningPetals(gb, b, o, dpr)) {
+          gb.restore();
+          continue;
+        }
+        gb.restore();
+        flowers++;
+
+        const a = gv.getImageData(0, 0, W, H).data;
+        const c = gb.getImageData(0, 0, W, H).data;
+        for (let i = 0; i < a.length; i++) {
+          const d = Math.abs(a[i] - c[i]);
+          if (d > max) max = d;
+          sum += d;
+          total++;
+        }
+        // How much each arm actually put on the canvas, and WHERE.
+        //
+        // The error budget above cannot police the transform on its own: any reference drawn
+        // through the same blit inherits the same mistake, and comparing a broken arm to a
+        // broken reference passes. Measured — with the squash applied twice, every error-budget
+        // check here passed, because the opening-1 reference was squashed twice as well.
+        //
+        // So the flower's own GEOMETRY is the reference instead, and geometry is not something
+        // the blit gets a vote on. A bitmap sized too small loses petal tips (ink falls); a
+        // wrong transform moves the silhouette (the box moves or changes shape). Neither can
+        // hide behind a budget.
+        let vx0 = 1e9,
+          vy0 = 1e9,
+          vx1 = -1,
+          vy1 = -1;
+        let bx0 = 1e9,
+          by0 = 1e9,
+          bx1 = -1,
+          by1 = -1;
+        for (let px = 0; px < W; px++) {
+          for (let py = 0; py < H; py++) {
+            const i = (py * W + px) * 4;
+            if (!(a[i] === 0x2b && a[i + 1] === 0x30 && a[i + 2] === 0x26)) {
+              inkVector++;
+              if (px < vx0) vx0 = px;
+              if (py < vy0) vy0 = py;
+              if (px > vx1) vx1 = px;
+              if (py > vy1) vy1 = py;
+            }
+            if (!(c[i] === 0x2b && c[i + 1] === 0x30 && c[i + 2] === 0x26)) {
+              inkBitmap++;
+              if (px < bx0) bx0 = px;
+              if (py < by0) by0 = py;
+              if (px > bx1) bx1 = px;
+              if (py > by1) by1 = py;
+            }
+          }
+        }
+        if (vx1 >= 0 && bx1 >= 0) {
+          boxOff = Math.max(
+            boxOff,
+            Math.abs(vx0 - bx0),
+            Math.abs(vy0 - by0),
+            Math.abs(vx1 - bx1),
+            Math.abs(vy1 - by1),
+          );
+          // Summed rather than compared per flower. The median petal here is 4.21px wide, so a
+          // single flower's box is only a few pixels tall and a proportional error rounds down
+          // into the noise — a 45% vertical squash on a 6px flower is 3px, which is the same
+          // order as resampling bleed. Over 451 flowers the quantisation averages out and a
+          // proportional error stays proportional.
+          sumVecW += vx1 - vx0 + 1;
+          sumVecH += vy1 - vy0 + 1;
+          sumBmpW += bx1 - bx0 + 1;
+          sumBmpH += by1 - by0 + 1;
+        }
+      }
+      releaseGrowth(plant);
+    }
+    return {
+      max,
+      mean: sum / total,
+      flowers,
+      inkVector,
+      inkBitmap,
+      boxOff,
+      wRatio: sumBmpW / sumVecW,
+      hRatio: sumBmpH / sumVecH,
+    };
+  };
+
+  /**
+   * EVERY frame of growth, painted the way the game paints it — not five sampled ticks.
+   *
+   * `__compare(t, "direct-vs-swept")` sweeps to a tick and reads the result there, so the gate
+   * above only ever inspects the five ticks it names. A flower opens over OPEN_TICKS = 26, and
+   * `GROWING_TICKS` are 15 to 20 apart: an opening that went wrong in the middle and was correct
+   * at both ends would be invisible to it. Growth is also where every bug on this branch lived —
+   * the stale-prefix bake, the frozen 0.32 bloom, the double squash — and all three are
+   * mid-animation defects that a still at the wrong moment reports as fine.
+   *
+   * So this sweeps continuously and compares at every step, which is the same measurement the
+   * five-tick checks make, made densely. It returns the WORST frame and where it was, so a
+   * failure names a tick to go and look at instead of a number to argue with.
+   */
+  window.__worstOverGrowth = (until = 140, step = 2) => {
+    let max = 0;
+    let tick = -1;
+    let sum = 0;
+    let total = 0;
+    let frames = 0;
+    for (const plant of plants) {
+      releaseGrowth(plant);
+      for (let t = 0; t <= until; t += step) {
+        const a = draw("direct", plant, t);
+        // NOT released between frames — the layers accumulate, so this is the incremental
+        // painter under test rather than a fresh one-shot render at each tick.
+        const b = draw("layered", plant, t);
+        frames++;
+        let worstHere = 0;
+        for (let i = 0; i < a.length; i++) {
+          const d = Math.abs(a[i] - b[i]);
+          if (d) {
+            sum += d;
+            if (d > worstHere) worstHere = d;
+          }
+          total++;
+        }
+        if (worstHere > max) {
+          max = worstHere;
+          tick = t;
+        }
+      }
+      releaseGrowth(plant);
+    }
+    return { max, tick, frames, mean: sum / total };
+  };
+
+  // ---- FRAMES TO LOOK AT ----------------------------------------------------------------
+  // Every check in this file reduces a frame to a number, and the one question left is whether
+  // growth READS the same, which no number answers. These render the whole bed — four plants
+  // side by side, the way the garden shows them — so the sequence can be watched rather than
+  // summarised.
+
+  // Wide enough that no plant is CLIPPED. A first attempt used 1240 — the width of the game's
+  // viewport — and cut the outer two plants off at the canvas edges. A review frame that crops
+  // the picture hides exactly the region a defect could be in, and the reviewer cannot tell a
+  // missing petal from one that was never in shot. `plantBounds` says these reach ~400px across.
+  const FRAME_W = 1800;
+  const FRAME_H = 700;
+
+  /**
+   * Compose the whole bed into a context, at `dpr` device pixels per world pixel.
+   *
+   * ⚠️ THE BACKING STORE MUST SCALE WITH `dpr`, and an earlier version of this got it wrong in a
+   * way worth recording: it passed `dpr` down to `paintPlantGrowing` — which uses it only for the
+   * resolution of its internal LAYERS — while leaving the output canvas a fixed FRAME_W x FRAME_H.
+   * So every captured frame was 1x no matter what was asked for.
+   *
+   * That matters because `garden/garden.ts:111` renders the real game at
+   * `Math.min(2, devicePixelRatio)`. A 1x capture is HALF the resolution the game produces on a
+   * retina display, and a reviewer looking at it is judging a worse picture than the game draws —
+   * the same class of mistake as the 9x-magnified review that produced the retracted
+   * OPENING_CEILING. Match the game, or the review is of something else.
+   */
+  function composeBed(g, tick, how, dpr) {
+    g.save();
+    g.scale(dpr, dpr);
+    g.fillStyle = "#2b3026";
+    g.fillRect(0, 0, FRAME_W, FRAME_H);
+    const slot = FRAME_W / plants.length;
+    plants.forEach((plant, i) => {
+      g.save();
+      g.translate((i + 0.5) * slot - W / 2, 0);
+      if (how === "layered") paintPlantGrowing(g, plant, tick, dpr);
+      else paintPlant(g, plant, tick);
+      g.restore();
+    });
+    g.restore();
+  }
+
+  function bedCanvas(tick, how, dpr, readback) {
+    const c = document.createElement("canvas");
+    c.width = Math.round(FRAME_W * dpr);
+    c.height = Math.round(FRAME_H * dpr);
+    const g = c.getContext(
+      "2d",
+      readback ? { willReadFrequently: true } : undefined,
+    );
+    composeBed(g, tick, how, dpr);
+    return { canvas: c, ctx: g };
+  }
+
+  /**
+   * One frame of the whole bed, as a PNG data URL.
+   *
+   * Deliberately NOT released between calls, so a driver walking the ticks upward drives the
+   * INCREMENTAL painter — the same accumulation the game does. Call `__releaseAll` to start a
+   * sequence over.
+   */
+  window.__frame = (tick, how, dpr = 1) =>
+    bedCanvas(tick, how, dpr, false).canvas.toDataURL("image/png");
+
+  /** The world-space size of a captured frame, so a viewer can lay it out at true 1:1. */
+  window.__frameSize = () => ({ w: FRAME_W, h: FRAME_H });
+
+  window.__releaseAll = () => {
+    for (const plant of plants) releaseGrowth(plant);
+  };
+
+  /** The bed at one tick, as raw pixels — the same composition `__frame` encodes to a PNG. */
+  function bedPixels(tick, how, dpr) {
+    const { canvas: c, ctx: g } = bedCanvas(tick, how, dpr, true);
+    return g.getImageData(0, 0, c.width, c.height).data;
+  }
+
+  /** Mean absolute channel change between two frames — how much the picture MOVED. */
+  function moved(a, b) {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) sum += Math.abs(a[i] - b[i]);
+    return sum / a.length;
+  }
+
+  /**
+   * How much each painter MOVES from frame to frame, across the whole growth window.
+   *
+   * Everything else in this file compares the two painters AT a tick. None of it can see a
+   * TEMPORAL artefact — a pop when a chain stops being drawn live and starts being blitted from
+   * a baked layer, a flower that jumps the last of its opening, a stutter. Those exist only
+   * BETWEEN frames, and a still taken either side of one looks perfect.
+   *
+   * If growth reads the same, the two delta series track each other. A defect unique to the
+   * layered painter shows up as a frame where it moved much more than the direct painter did
+   * (a pop) or much less (something frozen) — a RATIO away from 1, at one tick, rather than a
+   * few percent spread across all of them.
+   *
+   * Renders its own frames rather than reading the captured PNGs: those are gitignored review
+   * artefacts that only exist after a capture run, so a check that depended on them would be
+   * skipped-by-absence in CI, which reads exactly like a check that passed.
+   */
+  window.__motionSeries = (until = 130, step = 2, dpr = 1) => {
+    const out = [];
+    window.__releaseAll();
+    let prevDirect = null;
+    let prevLayered = null;
+    for (let t = 0; t <= until; t += step) {
+      const d = bedPixels(t, "direct", dpr);
+      // NOT released between ticks — the layered arm accumulates, as the game does.
+      const l = bedPixels(t, "layered", dpr);
+      if (prevDirect)
+        out.push({
+          tick: t,
+          direct: moved(prevDirect, d),
+          layered: moved(prevLayered, l),
+        });
+      prevDirect = d;
+      prevLayered = l;
+    }
+    window.__releaseAll();
+    return out;
+  };
+
+  /** How much ink a plant puts on screen — so a comparison of two blank frames cannot pass. */
+  window.__ink = (tick) => {
+    let inked = 0;
+    for (const plant of plants) {
+      const a = draw("direct", plant, tick);
+      for (let i = 0; i < a.length; i += 4) {
+        // Anything that is not the flat backdrop counts as drawing.
+        if (a[i] !== 0x2b || a[i + 1] !== 0x30 || a[i + 2] !== 0x26) inked++;
+      }
+    }
+    return inked;
+  };
+
+  /** WHERE the two arms differ: bounding box plus a coarse map, so a guess is unnecessary. */
+  window.__diffMap = (tick, cols = 60, rows = 24) => {
+    const plant = plants[0];
+    const a = draw("direct", plant, tick);
+    const b = draw("layered", plant, tick);
+    releaseGrowth(plant);
+    let minX = 1e9,
+      minY = 1e9,
+      maxX = -1,
+      maxY = -1;
+    const grid = Array.from({ length: rows }, () => new Array(cols).fill(0));
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        let d = 0;
+        for (let c = 0; c < 3; c++)
+          d = Math.max(d, Math.abs(a[i + c] - b[i + c]));
+        if (d > 3) {
+          if (x < minX) minX = x;
+          if (y < minY) minY = y;
+          if (x > maxX) maxX = x;
+          if (y > maxY) maxY = y;
+          const gy = Math.floor((y / H) * rows),
+            gx = Math.floor((x / W) * cols);
+          if (d > grid[gy][gx]) grid[gy][gx] = d;
+        }
+      }
+    }
+    // Where the plant itself is, for comparison — a difference confined to the plant's edge
+    // means something different from one spread across its body.
+    let pminX = 1e9,
+      pminY = 1e9,
+      pmaxX = -1,
+      pmaxY = -1;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 4;
+        if (a[i] !== 0x2b || a[i + 1] !== 0x30 || a[i + 2] !== 0x26) {
+          if (x < pminX) pminX = x;
+          if (y < pminY) pminY = y;
+          if (x > pmaxX) pmaxX = x;
+          if (y > pmaxY) pmaxY = y;
+        }
+      }
+    }
+    const ramp = " .:-=+*#%@";
+    const art = grid
+      .map((r) =>
+        r.map((v) => (v ? ramp[Math.min(9, Math.ceil(v / 12))] : " ")).join(""),
+      )
+      .join("\n");
+    return {
+      diffBox: [minX, minY, maxX, maxY],
+      plantBox: [pminX, pminY, pmaxX, pmaxY],
+      art,
+    };
+  };
+
+  // A sentinel, so a driver that gets Vite's SPA fallback — or another project's dev
+  // server on the same port — fails with a sentence instead of a timeout.
+  window.__probeName = "heirloom-growth";
+  window.__ready = true;
+</script>

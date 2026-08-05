@@ -87,6 +87,7 @@ import { placeRetired, type Placement } from "../src/render/forest";
 import { bedDepth, toCanvasSpace, toPlotSpace } from "../src/render/bed";
 import { mulberry32 } from "../src/rng";
 import { PALETTE, paintPlant } from "../src/render/stage";
+import { growingLayerBytes } from "../src/render/growing";
 import { drawScene, sharedAge } from "../src/scene";
 import type { Plant, Vec2 } from "../src/types";
 
@@ -143,7 +144,23 @@ function applyCanvasSize(): void {
 }
 applyCanvasSize();
 
-const rand = mulberry32(Date.now() & 0x7fffffff);
+/**
+ * The garden's RNG, pinnable with `?seed=`.
+ *
+ * Not a debug leftover. Every measurement driver in `tools/` compares numbers between runs, and
+ * a randomly drawn garden changes how much is on screen: measured 100 flowers at growth tick 70
+ * in one run and 350 in the next, which moved "seconds below 30fps" from 0.00 to 1.00 with no
+ * code change at all. A threshold set against one of those readings is a coin flip against the
+ * other. Two earlier harnesses in this project were fooled by this same `Date.now()` seed — one
+ * compared 366 blooms against 193 and reported the difference as a finding.
+ *
+ * Unseeded behaviour is unchanged, so a player still gets a different garden every time.
+ */
+const seedParam = new URLSearchParams(location.search).get("seed");
+const seedNumber = seedParam === null ? NaN : Number(seedParam);
+const rand = mulberry32(
+  (Number.isFinite(seedNumber) ? seedNumber : Date.now()) & 0x7fffffff,
+);
 
 /**
  * The running retirement history.
@@ -2034,6 +2051,19 @@ Object.assign(window as unknown as Record<string, unknown>, {
   __seek: (t: number) => {
     growthNow = t;
   },
+  /**
+   * Bytes the growth renderer is holding across the bed.
+   *
+   * Five full-plant layers per growing plant, plus a bitmap for every flower still opening, is
+   * real memory and it peaks exactly when the most is on screen. The design named this as a
+   * risk to be MEASURED rather than assumed (spec §6); `tools/check-growth-fps.mjs` asserts a
+   * ceiling on it, and a ceiling needs a number from the running game to be worth anything.
+   */
+  __growthBytes: () =>
+    garden.plots.reduce(
+      (n, p) => n + (p.occupant ? growingLayerBytes(p.occupant.plant) : 0),
+      0,
+    ),
   __state: () => ({
     tray: garden.tray.length,
     planted: garden.plots.filter((p) => p.occupant).length,

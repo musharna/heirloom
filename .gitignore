@@ -15,3 +15,6 @@ dist/
 # referenced them as images — every mention in the docs is prose about where a tool WRITES.
 # A screenshot worth showing is worth committing on purpose.
 shots/
+
+# Internal planning notes (plans/specs) — never publish
+docs/superpowers/

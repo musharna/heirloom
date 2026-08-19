@@ -267,8 +267,7 @@ GARDEN_URL=http://localhost:4173/heirloom/garden/ npm run drive
 machine under CPU throttling, and a shared CI runner is several times slower before any throttle
 is applied — a frame-rate threshold does not travel between machines.
 
-Design and per-milestone outcomes, including what went wrong and why:
-`docs/superpowers/specs/2026-07-29-heirloom-modern-seed-design.md`.
+Design and per-milestone outcomes are tracked internally.
 
 Milestone history, including the reverts: [`CHANGELOG.md`](CHANGELOG.md).
 

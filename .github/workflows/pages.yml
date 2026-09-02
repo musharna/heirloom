@@ -6,7 +6,7 @@ name: pages
 # nobody has tested.
 on:
   push:
-    branches: [m1-growth-spike]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 

@@ -5,6 +5,16 @@ branch, so the units here are **milestones**, newest first, dated by the commits
 them. Where a milestone retracted or reverted something, that is recorded too — a changelog that
 only lists what worked is a marketing document.
 
+## Unreleased
+
+- **`prefers-reduced-motion` is honoured.** `reducedMotion()` in `src/render/motion.ts` is
+  the one source of truth (live `matchMedia`, with `setReducedMotionForTest` as the seam), and
+  `swayAt` returns 0 — the resting pose, which is the geometry the plant is made of — when it
+  is on. Paint-time only: `now`, `motionNow`, growth and the RNG are untouched, and
+  `test/reduced-motion.test.ts` pins that a grown plant is byte-identical either way. Insects,
+  the recede animation and the plant-flash still run; there is no CSS animation in any page to
+  gate.
+
 ## Smooth growth — 2026-08-04
 
 - A planting used to drop the bed to ~6.5fps for about eight seconds, and the still-image cache

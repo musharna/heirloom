@@ -167,6 +167,39 @@ export function gustAt(t: number, x: number, worldW: number): number {
   return Math.exp(-d * d);
 }
 
+/**
+ * Whether the visitor has asked for less motion. ONE source of truth, read at paint time.
+ *
+ * `prefers-reduced-motion` is a rendering preference, and this file is the one place where
+ * rendering and time are kept apart — see the header. So the preference is honoured HERE,
+ * at the shear, and nowhere upstream: `motionNow` keeps advancing, `now` keeps growing the
+ * plant, the RNG is never consulted, and a saved or shared garden is byte-identical whether
+ * the person who opened it wanted it to sway or not. It is a decision about the matrix, not
+ * about the clock, and the test pins that growth output does not depend on it.
+ *
+ * Read live rather than cached at module load, so flipping the OS setting takes effect on the
+ * next frame. `matchMedia` is a DOM API; where it does not exist (tests, node) the answer is
+ * "no preference", which is what a browser without support reports too.
+ */
+export function reducedMotion(): boolean {
+  if (reducedMotionOverride !== null) return reducedMotionOverride;
+  const mm = (globalThis as { matchMedia?: (q: string) => { matches: boolean } })
+    .matchMedia;
+  if (typeof mm !== "function") return false;
+  return mm("(prefers-reduced-motion: reduce)").matches;
+}
+
+let reducedMotionOverride: boolean | null = null;
+
+/**
+ * Test seam. `null` restores the live `matchMedia` answer. Not a switch the game offers —
+ * the preference belongs to the operating system, and a per-site toggle that disagreed with
+ * it would be one more thing to explain.
+ */
+export function setReducedMotionForTest(value: boolean | null): void {
+  reducedMotionOverride = value;
+}
+
 export type SwayOpts = {
   /** 0..1 from the phenotype. A stiff stem bends less; a slack one bends more. */
   stiffness?: number;
@@ -186,6 +219,9 @@ export function swayAt(
   worldW: number,
   opts: SwayOpts = {},
 ): number {
+  // The smallest static pose is the resting one: k = 0 is exactly the geometry the plant is
+  // made of (see the header), so nothing is approximated by standing it still.
+  if (reducedMotion()) return 0;
   const phase = swayPhase(genomeKey);
   // A slack plant sways further than a stiff one. Clamped so a stiffness outside 0..1 — which
   // the phenotype does not produce today, but a later tuning pass might — cannot invert the

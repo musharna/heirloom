@@ -1158,12 +1158,39 @@ function insectAt(p: Vec2): Insect | null {
   return null;
 }
 
+/**
+ * Every open flower whose drawn centre is ON THE CANVAS, in canvas space.
+ *
+ * One list for everything that means "a flower the player can see": where a carrier may land,
+ * whether one can arrive at all, and what `__blooms` hands the drivers to aim at. It used to be
+ * built twice, and neither copy checked the canvas. A plant on the edge plot can lean out of the
+ * world — on one garden in about thirty a founder at x=135 carries flowers at x=-124 — so a
+ * driver aiming at the first flower in the list pressed the page outside the canvas, took no
+ * seed, and five checks failed together as "tray 0 -> 0". The same list let a carrier settle
+ * on a flower nobody could see or reach.
+ *
+ * The centre is the test because it is what gets aimed at: `bloomAt` hits within a radius of
+ * the centre, so a flower whose centre is on the canvas can always be pressed.
+ */
+function drawnBlooms(): { plotIndex: number; x: number; y: number }[] {
+  return garden.plots.flatMap((plot, plotIndex) => {
+    const occ = plot.occupant;
+    if (!occ) return [];
+    const base = occ.plant.segments[0];
+    const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
+    const d = bedDepth(plotIndex);
+    return bloomsOf(occ, growthNow)
+      .map((b) => {
+        const at = toCanvasSpace(b.center, anchor, d);
+        return { plotIndex, x: at.x, y: at.y };
+      })
+      .filter((b) => b.x >= 0 && b.x < W && b.y >= 0 && b.y < H);
+  });
+}
+
 /** How many flowers are open anywhere in the bed — a carrier needs somewhere to land. */
 function bloomCount(): number {
-  return garden.plots.reduce(
-    (n, p) => n + (p.occupant ? bloomsOf(p.occupant, growthNow).length : 0),
-    0,
-  );
+  return drawnBlooms().length;
 }
 
 /**
@@ -1175,17 +1202,7 @@ function bloomCount(): number {
  * the same trap `__blooms` documents for drivers aiming a pointer.
  */
 function anyOpenBloom(): { plotIndex: number; x: number; y: number } | null {
-  const all = garden.plots.flatMap((plot, plotIndex) => {
-    const occ = plot.occupant;
-    if (!occ) return [];
-    const base = occ.plant.segments[0];
-    const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
-    const d = bedDepth(plotIndex);
-    return bloomsOf(occ, growthNow).map((b) => {
-      const at = toCanvasSpace(b.center, anchor, d);
-      return { plotIndex, x: at.x, y: at.y };
-    });
-  });
+  const all = drawnBlooms();
   if (!all.length) return null;
   return all[Math.floor(rand() * all.length)] ?? null;
 }
@@ -2091,18 +2108,7 @@ Object.assign(window as unknown as Record<string, unknown>, {
    * flower; returning untransformed coordinates made them click at where flowers used to be,
    * and the resulting failures read as "no seed was taken" rather than as "the hook is lying".
    */
-  __blooms: () =>
-    garden.plots.flatMap((plot, plotIndex) => {
-      const occ = plot.occupant;
-      if (!occ) return [];
-      const base = occ.plant.segments[0];
-      const anchor = { x: base?.x0 ?? 0, y: base?.y0 ?? 0 };
-      const d = bedDepth(plotIndex);
-      return bloomsOf(occ, growthNow).map((b) => {
-        const at = toCanvasSpace(b.center, anchor, d);
-        return { plotIndex, x: at.x, y: at.y };
-      });
-    }),
+  __blooms: () => drawnBlooms(),
   /** Serialized genomes, for asserting a save round-tripped the actual plants. */
   __codes: () => ({
     plots: garden.plots.map((p) =>

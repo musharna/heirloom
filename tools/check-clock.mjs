@@ -92,42 +92,51 @@ const fast = await sample(3000);
 // work and was tried: a settled bed spends most of a 16ms frame waiting on the compositor
 // rather than running script, so CPU throttling does not scale frame time linearly. 4x took
 // 59fps to 37, and 5x took 60fps to 34 — both far short of the separation the comparison needs,
-// and both predicted to land near the target. Probe cheaply, then measure properly at whatever
-// actually worked.
+// and both predicted to land near the target.
+//
+// Each rung is judged on the SAME full-length sample that the comparison then uses. It used to
+// be judged on a 700ms probe and then re-measured for 3s against the identical cut, which made
+// every probe that landed near the cut a coin flip: across 30 CI runs the full sample read up
+// to 2.9% faster than its probe, and one probe at 29.7fps against a 30.05 cut came back as
+// 30.1 — "CONTROL: the throttle actually changed the frame rate" failed on a throttle that had
+// halved the frame rate. Two measurements of one quantity, one cut, is a design that fails in
+// proportion to how often the machine lands near the cut. Selecting on the compared sample
+// removes the second measurement, so the separation the controls assert is a property of the
+// very data the comparison reads.
+//
+// This is not a retry: the ladder was always a search. A rung whose sample does not separate
+// does not discriminate, and the search moves on exactly as it did when a probe said so.
 const LADDER = [4, 8, 12, 20];
 let chosen = null;
+let slow = null;
 for (const rate of LADDER) {
   await cdp.send('Emulation.setCPUThrottlingRate', { rate });
-  await page.waitForTimeout(250);
-  const probe = await sample(700);
-  const frameMs = 1000 / probe.fps;
+  await page.waitForTimeout(300);
+  const s = await sample(3000);
+  const frameMs = 1000 / s.fps;
   console.log(
-    `      probe ${String(rate).padStart(2)}x: ${probe.fps.toFixed(1)} fps, ${frameMs.toFixed(0)}ms/frame`,
+    `      rung ${String(rate).padStart(2)}x: ${s.fps.toFixed(1)} fps, ${frameMs.toFixed(0)}ms/frame`,
   );
   if (frameMs >= CAP_MS) break; // past the cap; nothing slower will help
-  if (probe.fps < fast.fps / MIN_SEPARATION) {
+  if (s.fps < fast.fps / MIN_SEPARATION) {
     chosen = rate;
+    slow = s;
     break;
   }
 }
+await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
 
 if (chosen === null) {
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
   skip(
     'the growth clock survives a change of frame rate',
     `no throttle on this machine both separates the frame rates and stays inside the ${CAP_MS}ms ` +
       `cap — assertion 1 above still gates, and it is the one that discriminates`,
   );
 } else {
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: chosen });
-  await page.waitForTimeout(300);
-  const slow = await sample(3000);
-  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
-
-  // CONTROLS FIRST, and re-checked at the full sample length rather than trusted from the
-  // probe. This assertion compares two frame rates, so if the throttle did not hold there are
-  // not two frame rates, and the comparison passes on any clock at all — including the
-  // frame-counted one it exists to catch.
+  // CONTROLS, asserted on the sample being compared. They hold by construction now; they stay
+  // as assertions so that a change which decouples selection from comparison again fails here
+  // rather than letting the comparison pass on a single frame rate — the frame-counted clock it
+  // exists to catch passes any comparison of a frame rate with itself.
   const separated = slow.fps < fast.fps / MIN_SEPARATION;
   const slowFrameMs = 1000 / slow.fps;
   const insideCap = slowFrameMs < CAP_MS;

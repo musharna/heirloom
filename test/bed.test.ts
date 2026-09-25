@@ -21,7 +21,7 @@ describe("the bed has depth, and it is shallower than the forest's", () => {
     const rand = mulberry32(5);
     let nearestForest = 0;
     for (let i = 0; i < 300; i++) {
-      const p = placeRetired(genomeSeed(randomGenome(rand)), i, 1180);
+      const p = placeRetired(genomeSeed(randomGenome(rand)), i, 1180, 590);
       nearestForest = Math.max(nearestForest, p.alpha);
     }
     let furthestBed = 1;

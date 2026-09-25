@@ -29,8 +29,9 @@ export function resolvePlacement(
   genomeKey: number,
   layers: number,
   w: number,
+  originX: number,
 ): Placement {
-  return at ?? placeRetired(genomeKey, layers, w);
+  return at ?? placeRetired(genomeKey, layers, w, originX);
 }
 
 export class Forest {
@@ -73,7 +74,13 @@ export class Forest {
   retire(plant: Plant, genomeKey: number, at?: Placement): void {
     const origin = plant.segments[0];
     if (!origin) return;
-    const place: Placement = resolvePlacement(at, genomeKey, this.layers, this.w);
+    const place: Placement = resolvePlacement(
+      at,
+      genomeKey,
+      this.layers,
+      this.w,
+      origin.x0,
+    );
     const c = this.ctx;
 
     // `source-atop` confines the wash to pixels that already exist, so the empty background

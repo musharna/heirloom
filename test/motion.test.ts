@@ -279,14 +279,14 @@ describe("receding hands over to the buffer without a visible seam", () => {
     // composite time is not the one the animation eased toward. Ignoring the reservation
     // sends the plant to a different spot in the frame where the two swap over.
     const reserved = { dx: 99, dy: -5, scale: 0.5, alpha: 0.4, blur: 1.5 };
-    expect(resolvePlacement(reserved, 12345, 3, WORLD)).toBe(reserved);
+    expect(resolvePlacement(reserved, 12345, 3, WORLD, WORLD / 2)).toBe(reserved);
   });
 
   it("CONTROL: falls back to a fresh placement when none was reserved", () => {
     // Without this the assertion above is satisfied by a function that always returns its
     // first argument, including when that argument is undefined.
-    const fresh = resolvePlacement(undefined, 12345, 3, WORLD);
-    expect(fresh).toEqual(placeRetired(12345, 3, WORLD));
+    const fresh = resolvePlacement(undefined, 12345, 3, WORLD, WORLD / 2);
+    expect(fresh).toEqual(placeRetired(12345, 3, WORLD, WORLD / 2));
   });
 });
 

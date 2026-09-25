@@ -83,7 +83,7 @@ import {
   RECEDE_TICKS,
   ticksElapsed,
 } from "../src/render/motion";
-import { placeRetired, type Placement } from "../src/render/forest";
+import { BED_MARGIN, placeRetired, type Placement } from "../src/render/forest";
 import { bedDepth, toCanvasSpace, toPlotSpace } from "../src/render/bed";
 import { mulberry32 } from "../src/rng";
 import { PALETTE, paintPlant } from "../src/render/stage";
@@ -446,7 +446,7 @@ if (restoreQueue.length > 0) requestAnimationFrame(drainRestore);
 
 /** A retired plant's x may predate a narrower world; keep it on the bed. */
 function clampToBed(x: number): number {
-  return Math.min(W - 24, Math.max(24, x));
+  return Math.min(W - BED_MARGIN, Math.max(BED_MARGIN, x));
 }
 
 /**
@@ -1731,7 +1731,13 @@ function frame(nowMs: number = performance.now()): void {
       receding.push({
         plant: gone.plant,
         key,
-        place: placeRetired(key, forest.depth + receding.length, W),
+        // The origin logRetirement records, so a reload re-derives this exact placement.
+        place: placeRetired(
+          key,
+          forest.depth + receding.length,
+          W,
+          gone.plant.segments[0]?.x0 ?? W / 2,
+        ),
         start: motionNow,
       });
       logRetirement(gone);

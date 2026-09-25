@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  BED_MARGIN,
   WASH,
   effectiveDepth,
   placeRetired,
   remainingContrast,
 } from "../src/render/forest";
+import { plotPositions } from "../src/game/layout";
 import { randomGenome } from "../src/genome/genome";
 import { genomeSeed } from "../src/genome/serialize";
 import { mulberry32 } from "../src/rng";
@@ -62,20 +64,20 @@ describe("placeRetired", () => {
   it("is deterministic — the forest must not rearrange itself on reload", () => {
     // §7 regenerates the background from a replay list rather than storing an image. Random
     // placement would reshuffle the player's whole history every time they opened the page.
-    expect(placeRetired(key(), 3)).toEqual(placeRetired(key(), 3));
+    expect(placeRetired(key(), 3, 1180, 590)).toEqual(placeRetired(key(), 3, 1180, 590));
   });
 
   it("separates two retirements of the SAME genome", () => {
     // Otherwise a lineage bred true would stack identical silhouettes exactly on top of each
     // other and read as one plant.
-    expect(placeRetired(key(), 0)).not.toEqual(placeRetired(key(), 1));
+    expect(placeRetired(key(), 0, 1180, 590)).not.toEqual(placeRetired(key(), 1, 1180, 590));
   });
 
   it("scatters horizontally rather than stacking in plot columns", () => {
     const rand = mulberry32(9);
     const xs = Array.from(
       { length: 200 },
-      (_, i) => placeRetired(genomeSeed(randomGenome(rand)), i).dx,
+      (_, i) => placeRetired(genomeSeed(randomGenome(rand)), i, 1180, 590).dx,
     );
     expect(Math.min(...xs)).toBeLessThan(-100);
     expect(Math.max(...xs)).toBeGreaterThan(100);
@@ -86,7 +88,7 @@ describe("placeRetired", () => {
     // rendering error rather than as distance.
     const rand = mulberry32(11);
     const places = Array.from({ length: 400 }, (_, i) =>
-      placeRetired(genomeSeed(randomGenome(rand)), i),
+      placeRetired(genomeSeed(randomGenome(rand)), i, 1180, 590),
     );
     const sorted = [...places].sort((a, b) => b.scale - a.scale);
     const front = sorted[0]!;
@@ -99,7 +101,7 @@ describe("placeRetired", () => {
   it("stays inside sane ranges", () => {
     const rand = mulberry32(13);
     for (let i = 0; i < 500; i++) {
-      const p = placeRetired(genomeSeed(randomGenome(rand)), i);
+      const p = placeRetired(genomeSeed(randomGenome(rand)), i, 1180, 590);
       expect(p.scale).toBeGreaterThan(0.6);
       expect(p.scale).toBeLessThanOrEqual(0.83);
       expect(p.alpha).toBeGreaterThan(0.25);
@@ -117,7 +119,7 @@ describe("placeRetired", () => {
     // recede", only "does it vary", and variation is not depth.
     const rand = mulberry32(21);
     for (let i = 0; i < 300; i++) {
-      const p = placeRetired(genomeSeed(randomGenome(rand)), i);
+      const p = placeRetired(genomeSeed(randomGenome(rand)), i, 1180, 590);
       expect(p.alpha).toBeLessThan(0.55); // never near a live plant's full opacity
       expect(p.scale).toBeLessThan(0.85); // always visibly smaller
       expect(p.blur).toBeGreaterThan(1); // always softer than a sharp foreground edge
@@ -134,12 +136,41 @@ describe("scatter scales with the world", () => {
     const rand = mulberry32(77);
     for (const worldW of [360, 396, 560, 847, 1180]) {
       for (let i = 0; i < 200; i++) {
-        const p = placeRetired(genomeSeed(randomGenome(rand)), i, worldW);
-        // An origin anywhere on the bed plus this offset must stay within the world, with
-        // room for the canopy either side.
+        const p = placeRetired(genomeSeed(randomGenome(rand)), i, worldW, worldW / 2);
+        // The SPREAD scales with the world. This alone does not keep a plant on the canvas —
+        // from an edge plot a bounded offset still leaves it; the test below owns that.
         expect(Math.abs(p.dx), `world ${worldW}`).toBeLessThan(worldW * 0.25);
       }
     }
+  });
+
+  it("keeps the placed plant's base on the canvas from EVERY plot, edge plots included", () => {
+    // The test above bounds |dx| alone, and that cannot see the defect it was written for: an
+    // offset is only safe relative to where the plant starts. From the edge plot of a desktop
+    // world (x=135) a draw near -170 put the base at -35, and a narrow plant was composited
+    // wholly off the left edge — `depth 1, coverage 0` in drive-persist, about 1 retirement in
+    // 40 from that plot, and intermittent in CI only because the garden is seeded from
+    // Date.now(). The base is the invariant because every plant has a stem that starts there.
+    const rand = mulberry32(79);
+    for (const worldW of [360, 396, 560, 847, 1180]) {
+      for (const plots of [1, 3, 6, 9]) {
+        for (const x of plotPositions(worldW, plots)) {
+          for (let i = 0; i < 60; i++) {
+            const p = placeRetired(genomeSeed(randomGenome(rand)), i, worldW, x);
+            const base = x + p.dx;
+            expect(base, `world ${worldW}, plot x ${x}`).toBeGreaterThanOrEqual(BED_MARGIN);
+            expect(base, `world ${worldW}, plot x ${x}`).toBeLessThanOrEqual(worldW - BED_MARGIN);
+          }
+        }
+      }
+    }
+    // POSITIVE CONTROL: bounding must not pin the edge plot to the edge. A plant retired from
+    // the leftmost plot still lands both left and right of where it stood.
+    const edge = Array.from({ length: 300 }, (_, i) =>
+      placeRetired(genomeSeed(randomGenome(rand)), i, 1180, 135).dx,
+    );
+    expect(Math.min(...edge)).toBeLessThan(-80);
+    expect(Math.max(...edge)).toBeGreaterThan(80);
   });
 
   it("CONTROL: a fixed scatter escapes a narrow world", () => {
@@ -151,7 +182,7 @@ describe("scatter scales with the world", () => {
   it("still scatters widely on a desktop world", () => {
     const rand = mulberry32(78);
     const xs = Array.from({ length: 300 }, (_, i) =>
-      placeRetired(genomeSeed(randomGenome(rand)), i, 1180).dx,
+      placeRetired(genomeSeed(randomGenome(rand)), i, 1180, 590).dx,
     );
     expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(250);
   });

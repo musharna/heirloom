@@ -69,6 +69,15 @@ if (!flowers.length) {
   await browser.close();
   process.exit(1);
 }
+// The hook's contract, checked against the page itself: a press at every flower it reports
+// must land on the canvas. When it reported flowers drawn off the edge, every check below that
+// aimed at one failed as "tray 0 -> 0", which says nothing about why.
+{
+  const off = await page.evaluate((pts) => pts.filter((p) =>
+    document.elementFromPoint(p.x, p.y)?.id !== 'c').length, flowers.map(toPage));
+  check('every reported flower can be pressed on the canvas', off === 0,
+    `${off} of ${flowers.length} fall outside it`);
+}
 
 // --- CLONE: a click on a flower ------------------------------------------------------
 let before = await state();
@@ -118,6 +127,16 @@ if (b) {
   // ...and the counterpart rule: holding the SAME flower reads the plant instead of cloning
   // it. One press, two gestures, separated only by duration — so both have to be pinned or a
   // change to the threshold silently eats one of them.
+  //
+  // The card must be CLOSED first, and asserted closed. Otherwise "a card is open afterwards"
+  // is satisfied by any earlier gesture that left one open — and one did: when the target
+  // flower was off the canvas the press never reached the game at all, the preceding drag was
+  // released onto a plant and toggled ITS card open, and this check passed on a hold that had
+  // not happened.
+  await page.keyboard.press('Escape');
+  const cardBefore = await page.evaluate(() => window.__card());
+  check('CONTROL: no card is open before the hold', cardBefore === null,
+    cardBefore === null ? 'closed' : 'a card was already open');
   before = await state();
   {
     const at = toPage(a);

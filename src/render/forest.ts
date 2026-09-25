@@ -61,15 +61,39 @@ export function effectiveDepth(): number {
 /** Horizontal scatter, as a fraction of world width. 340px of a 1180-wide world. */
 export const SCATTER = 0.288;
 
+/** How close to either edge of the world a plant's base may stand — live or retired. */
+export const BED_MARGIN = 24;
+
+/**
+ * @param originX Where the plant's base stands now. REQUIRED, because an offset is only safe
+ *   relative to where it starts: drawn blind, a -170 offset from the edge plot of a desktop world
+ *   (x=135) put a narrow plant wholly off the canvas — composited, and drawn nowhere.
+ */
 export function placeRetired(
   genomeKey: number,
   index: number,
-  worldW = 1180,
+  worldW: number,
+  originX: number,
 ): Placement {
   // Index is mixed in so that retiring the SAME genome twice does not stack two identical
   // silhouettes exactly on top of each other.
   const rand = mulberry32((genomeKey ^ (index * 0x9e3779b1)) >>> 0);
   const depth = rand(); // 0 = just behind the live bed, 1 = far back
+
+  // Scatter is a FRACTION of the world, not a fixed 340px. A fixed span is 29% of a 1180-wide
+  // desktop world but 86% of a 396-wide phone world, so on a phone retired plants were flung
+  // clean off the canvas and the background came back genuinely empty.
+  //
+  // And the target is REFLECTED back off the edges of the bed rather than clamped: bounding the
+  // span alone still let an edge plot throw its plant off the canvas, and clamping would stack
+  // every such plant in one column at the edge. Reflection is deterministic, so the forest still
+  // comes back identical on reload, and a placement that was already on the bed is unchanged —
+  // the only plants that move are the ones that were being drawn nowhere.
+  const lo = BED_MARGIN;
+  const hi = worldW - BED_MARGIN;
+  let target = originX + (rand() - 0.5) * worldW * SCATTER;
+  if (target < lo) target = 2 * lo - target;
+  else if (target > hi) target = 2 * hi - target;
 
   // These ranges were set by LOOKING at the result, not by choosing round numbers. The first
   // pass used alpha 0.58–0.78 and scale 0.78–0.94, and a retired plant then arrived nearly as
@@ -77,11 +101,7 @@ export function placeRetired(
   // and the live bed stopped being the subject of its own picture. A background layer has to
   // give up far more than it intuitively seems it should.
   return {
-    // Scatter is a FRACTION of the world, not a fixed 340px. A fixed span is 29% of a
-    // 1180-wide desktop world but 86% of a 396-wide phone world, so on a phone retired
-    // plants were flung clean off the canvas and the background came back genuinely empty —
-    // `depth 1, coverage 0`, a layer that had been composited and drawn nowhere.
-    dx: (rand() - 0.5) * worldW * SCATTER,
+    dx: target - originX,
     // Further back sits higher in frame and smaller: a cheap, consistent perspective cue.
     dy: -8 - depth * 30,
     scale: 0.82 - depth * 0.18,
